@@ -1,0 +1,27 @@
+# Python
+__pycache__/
+*.py[cod]
+.pytest_cache/
+
+# OS/editor noise
+.DS_Store
+Thumbs.db
+*.log
+
+# Environment and secrets
+.venv/
+venv/
+
+.env
+.env.*
+
+# Directories to ignore
+txt/
+
+# Data files
+*.parquet
+*.csv
+*.json
+
+# Exception: keep this specific CSV file
+!pipeline/weather/raw/NYC_Central_Park_weather_1869-2022.csv
