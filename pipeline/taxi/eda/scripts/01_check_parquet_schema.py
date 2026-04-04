@@ -1,4 +1,6 @@
+# -*- coding: utf-8 -*-
 import json
+
 from pathlib import Path
 
 import pyarrow.parquet as pq
@@ -94,6 +96,7 @@ report = {
 
 output_dir.mkdir(parents=True, exist_ok=True)
 output_file.write_text(json.dumps(report, indent=2, ensure_ascii=False) + "\n", encoding="utf-8")
+
 
 print(f"Saved report: {output_file}")
 

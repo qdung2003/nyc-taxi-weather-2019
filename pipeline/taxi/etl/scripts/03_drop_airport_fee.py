@@ -1,11 +1,13 @@
+# -*- coding: utf-8 -*-
 from pathlib import Path
+
 
 import pyarrow.parquet as pq
 from tqdm import tqdm
 
 
 taxi_root = Path(__file__).resolve().parents[2]
-input_file = taxi_root / "etl" / "results" / "02_total_yellow_2019.parquet"
+input_file = taxi_root / "etl" / "results" / "02_merge_parquet_2019.parquet"
 output_file = taxi_root / "etl" / "results" / "03_drop_airport_fee.parquet"
 column_to_drop = "airport_fee"
 

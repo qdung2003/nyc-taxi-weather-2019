@@ -1,4 +1,6 @@
+# -*- coding: utf-8 -*-
 import json
+
 from datetime import datetime
 from pathlib import Path
 
@@ -162,6 +164,7 @@ def profile_numeric_column(numpy_values, total_rows):
     }
 
 profile_report = json.loads(profile_file.read_text(encoding="utf-8"))
+
 high_duplicate_columns = profile_report["high_duplicate_columns"]
 total_rows = profile_report["total_rows"]
 columns_to_check = [column["column_name"] for column in high_duplicate_columns]
@@ -352,5 +355,6 @@ report = {
 
 output_dir.mkdir(parents=True, exist_ok=True)
 output_file.write_text(json.dumps(report, indent=2, ensure_ascii=False) + "\n", encoding="utf-8")
+
 
 print(f"Saved report: {output_file}")

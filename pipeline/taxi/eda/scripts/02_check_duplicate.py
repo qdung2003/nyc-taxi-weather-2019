@@ -1,4 +1,6 @@
+# -*- coding: utf-8 -*-
 import json
+
 from pathlib import Path
 
 import pyarrow as pa
@@ -8,7 +10,7 @@ from tqdm import tqdm
 
 
 taxi_root = Path(__file__).resolve().parents[2]
-input_file = taxi_root / "etl" / "results" / "02_total_yellow_2019.parquet"
+input_file = taxi_root / "etl" / "results" / "02_merge_parquet_2019.parquet"
 max_unique_values = 300
 output_dir = taxi_root / "eda" / "results"
 output_file = output_dir / "02_check_duplicate.json"
@@ -135,6 +137,7 @@ valid_counts = {column_name: 0 for column_name in column_names}
 active_unique_columns = set(column_names)
 
 schema_report = json.loads(schema_file.read_text(encoding="utf-8"))
+
 reference_schema = schema_report["reference_schema"]
 row_group_count = parquet.metadata.num_row_groups
 progress_kwargs = {
