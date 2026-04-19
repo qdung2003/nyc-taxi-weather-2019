@@ -1,102 +1,90 @@
-# -*- coding: utf-8 -*-
 import json
-
-from pathlib import Path
-
 import pyarrow.parquet as pq
+from pipeline.services.helpers import extract_month
+from pipeline.services.paths import TAXI_DIR, TAXI_RAW_TEMP_DIR
 
 
-taxi_root = Path(__file__).resolve().parents[2]
-input_dir = taxi_root / "raw"
-parquet_files = sorted(input_dir.glob("yellow_tripdata_2019-*.parquet"))
-output_dir = taxi_root / "eda" / "results"
+output_dir = TAXI_DIR / "eda" / "results"
+output_dir.mkdir(parents=True, exist_ok=True)
 output_file = output_dir / "01_check_parquet_schema.json"
 
 
-def to_posix(path: Path) -> str:
-    return path.as_posix()
+def main(conn):
 
+    link_parquet_files = sorted(
+        TAXI_RAW_TEMP_DIR.glob("yellow_tripdata_2019-*.parquet"), # Get all parquet files matching the pattern yellow_tripdata_2019-*.parquet
+        key=extract_month, # Sort files by month number (e.g. 1 for 01, 2 for 02, etc.) to have a consistent order
+    )
 
-schemas_by_file = {}
-type_maps_by_file = {}
-name_order_mismatches = []
-type_mismatches = []
+    if not link_parquet_files:
+        print(f"INFO: No parquet files found in {TAXI_RAW_TEMP_DIR}. Skipping parquet schema check.")
+        return
 
-for parquet_file in parquet_files:
-    parquet = pq.ParquetFile(parquet_file)
-    schema = parquet.schema_arrow
-    column_names = schema.names
-    schemas_by_file[parquet_file.name] = column_names
-    type_maps_by_file[parquet_file.name] = {
-        field.name: str(field.type) for field in schema
-    }
+    file_and_columns_types = {}
+    files_mismatches = []
 
-reference_file = parquet_files[0].name if parquet_files else None
-reference_schema = schemas_by_file.get(reference_file, [])
-reference_type_map = type_maps_by_file.get(reference_file, {})
-all_match = True
+    for link_parquet_file in link_parquet_files:
+        parquet_file_obj = pq.ParquetFile(link_parquet_file) # Open the parquet file to read its schema
+        schema = parquet_file_obj.schema_arrow # Get the Arrow schema of the parquet file, which contains column names and types
+        file_and_columns_types[link_parquet_file.name] = {
+            field.name: str(field.type) for field in schema # Create a dictionary mapping column names to their types as strings for the current parquet file
+        }
 
-for file_name, schema in schemas_by_file.items():
-    if schema != reference_schema:
-        all_match = False
-        missing_columns = [column for column in reference_schema if column not in schema]
-        extra_columns = [column for column in schema if column not in reference_schema]
-        name_order_mismatches.append(
-            {
-                "file_name": file_name,
-                "missing_columns": missing_columns,
-                "extra_columns": extra_columns,
-            }
-        )
+    reference_file = link_parquet_files[0].name
+    reference_columns_types = file_and_columns_types[reference_file]
+    escaped_path = link_parquet_files[0].as_posix().replace("'", "''")
+    rows = conn.execute(
+        f"""
+        DESCRIBE
+        SELECT *
+        FROM read_parquet('{escaped_path}')
+        """
+    ).fetchall()
+    database_columns_types = {str(row[0]): str(row[1]) for row in rows}
+    reference_pairs = set(reference_columns_types.items())
+    all_match = True
 
-for file_name, type_map in type_maps_by_file.items():
-    if file_name == reference_file:
-        continue
-
-    current_type_mismatches = []
-
-    for column_name in reference_schema:
-        if column_name not in type_map:
+    # Compare only key:value pairs (column_name -> type).
+    for file_name, columns_types in file_and_columns_types.items():
+        if file_name == reference_file: # Skip comparing the reference file with itself
             continue
 
-        reference_type = reference_type_map.get(column_name)
-        current_type = type_map.get(column_name)
+        current_pairs = set(columns_types.items())
+        if current_pairs == reference_pairs:
+            continue
 
-        if current_type != reference_type:
-            current_type_mismatches.append(
-                {
-                    "column_name": column_name,
-                    "reference_type": reference_type,
-                    "current_type": current_type,
-                }
-            )
-
-    if current_type_mismatches:
         all_match = False
-        type_mismatches.append(
+        missing_pairs = sorted(reference_pairs - current_pairs, key=lambda item: item[0])
+        extra_pairs = sorted(current_pairs - reference_pairs, key=lambda item: item[0])
+        missing_columns_types_pairs = {}
+        for column_name, column_type in missing_pairs:
+            missing_columns_types_pairs[str(column_name)] = str(column_type)
+
+        extra_columns_types_pairs = {}
+        for column_name, column_type in extra_pairs:
+            extra_columns_types_pairs[str(column_name)] = str(column_type)
+
+        file_mismatches = {
+            "missing": missing_columns_types_pairs,
+            "extra": extra_columns_types_pairs,
+        }
+
+        files_mismatches.append(
             {
                 "file_name": file_name,
-                "columns": current_type_mismatches,
+                "file_mismatches": file_mismatches,
             }
         )
 
-report = {
-    "input_directory": to_posix(input_dir),
-    "parquet_files": [parquet_file.name for parquet_file in parquet_files],
-    "reference_file": reference_file,
-    "column_count": len(reference_schema),
-    "all_match": all_match,
-    "reference_schema": {
-        column_name: reference_type_map.get(column_name)
-        for column_name in reference_schema
-    },
-    "name_order_mismatches": name_order_mismatches,
-    "type_mismatches": type_mismatches,
-}
-
-output_dir.mkdir(parents=True, exist_ok=True)
-output_file.write_text(json.dumps(report, indent=2, ensure_ascii=False) + "\n", encoding="utf-8")
-
-
-print(f"Saved report: {output_file}")
-
+    report = {
+        "input_directory": TAXI_RAW_TEMP_DIR.as_posix(),
+        "parquet_files": [link_parquet_file.name for link_parquet_file in link_parquet_files],
+        "reference_file": reference_file,
+        "column_count": len(reference_columns_types),
+        "all_match": all_match,
+        "reference_columns_types": reference_columns_types,
+        "database_columns_types": database_columns_types,
+        "files_mismatches": files_mismatches,
+    }
+    output_file.write_text(json.dumps(report, indent=2, ensure_ascii=False) + "\n", encoding="utf-8")
+    print(f"Saved report: {output_file}")

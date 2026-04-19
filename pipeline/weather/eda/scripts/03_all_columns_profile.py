@@ -1,11 +1,10 @@
-# -*- coding: utf-8 -*-
 import json
 from pathlib import Path
+from pipeline.services.paths import WEATHER_DIR
 
 
-weather_root = Path(__file__).resolve().parents[2]
-input_file = weather_root / "eda" / "results" / "01_check_duplicate.json"
-output_file = weather_root / "eda" / "results" / "03_all_columns_profile.html"
+input_file = WEATHER_DIR / "eda" / "results" / "01_check_duplicate.json"
+output_file = WEATHER_DIR / "eda" / "results" / "03_all_columns_profile.html"
 
 
 def load_json(path: Path):
@@ -246,7 +245,7 @@ def main() -> None:
           const pts = negBins.map((b, i) => `${{getX(i)}},${{getY(b.count)}}`);
           const areaPts = `${{getX(0)}},${{margin.top + plotH}} ` + pts.join(' ') + ` ${{getX(splitIdx)}},${{margin.top + plotH}}`;
           svg.appendChild(mk('polygon', {{ points: areaPts, fill: '#fecaca', 'fill-opacity': 0.25, stroke: 'none' }}));
-          
+
           // Blue area for positive
           const posBins = bins.slice(splitIdx);
           const pts2 = posBins.map((b, i) => `${{getX(i + splitIdx)}},${{getY(b.count)}}`);

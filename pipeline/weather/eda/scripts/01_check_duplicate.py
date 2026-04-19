@@ -1,147 +1,127 @@
-# -*- coding: utf-8 -*-
 import json
-import numpy as np
-import pandas as pd
-from pathlib import Path
 from tqdm import tqdm
+from pipeline.services.helpers import round_if_needed
+from pipeline.services.queries import quote_identifier
+from pipeline.services.tables import TABLE_WEATHER_RAW
+from pipeline.services.paths import WEATHER_DIR, WAREHOUSE_DB_FILE
 
 
-weather_root = Path(__file__).resolve().parents[2]
-input_file = weather_root / "etl" / "results" / "01_get_weather_2019.csv"
-max_unique_values = 300
-output_dir = weather_root / "eda" / "results"
+MAX_UNIQUE_VALUES = 300
+output_dir = WEATHER_DIR / "eda" / "results"
 output_file = output_dir / "01_check_duplicate.json"
-
-
-def to_posix(path: Path) -> str:
-    return path.as_posix()
-
-
-def round_if_needed(value):
-    if isinstance(value, float):
-        rounded = round(value, 2)
-        if rounded != value:
-            return rounded
-    return value
-
-
-def is_valid_for_dtype(series_raw: pd.Series, dtype_str: str) -> pd.Series:
-    if dtype_str in {"int8", "int16", "int32", "int64"}:
-        def try_int(v):
-            if pd.isna(v) or str(v).strip() == "":
-                return False
-            try:
-                f = float(v)
-                return f == int(f)
-            except (ValueError, TypeError):
-                return False
-        return series_raw.map(try_int)
-
-    if dtype_str in {"float16", "float32", "float64"}:
-        def try_float(v):
-            if pd.isna(v) or str(v).strip() == "":
-                return False
-            try:
-                float(v)
-                return True
-            except (ValueError, TypeError):
-                return False
-        return series_raw.map(try_float)
-
-    if "datetime" in dtype_str:
-        def try_datetime(v):
-            if pd.isna(v) or str(v).strip() == "":
-                return False
-            try:
-                pd.to_datetime(v)
-                return True
-            except (ValueError, TypeError):
-                return False
-        return series_raw.map(try_datetime)
-
-    # object / string: valid if not null
-    return series_raw.notna()
-
-
-# First pass: pandas infers dtypes from CSV (type guessing), DATE parsed directly
-df_typed = pd.read_csv(input_file, parse_dates=["DATE"])
-reference_schema = {
-    col: ("DATE" if col == "DATE" else str(df_typed[col].dtype))
-    for col in df_typed.columns
-}
-column_names = list(df_typed.columns)
-total_rows = len(df_typed)
-
-# Second pass: read as raw strings to validate against inferred types (DATE already guaranteed valid)
-df_raw = pd.read_csv(input_file, dtype=str)
-
-# Compute valid counts per column
-valid_counts = {}
-for col in tqdm(column_names, desc="Checking valid type counts"):
-    mask = is_valid_for_dtype(df_raw[col], reference_schema[col])
-    valid_counts[col] = int(mask.sum())
-
-# Classify columns by cardinality
-low_cardinality_column_names = []
-high_cardinality_column_names = []
-
-for col in column_names:
-    unique_count = df_typed[col].nunique(dropna=False)
-    if unique_count <= max_unique_values:
-        low_cardinality_column_names.append(col)
-    else:
-        high_cardinality_column_names.append(col)
-
-# Build low-cardinality details
-low_duplicate_columns = []
-for col in low_cardinality_column_names:
-    vc = df_typed[col].value_counts(dropna=False)
-    unique_vals = df_typed[col].unique().tolist()
-    sorted_vals = sorted(
-        unique_vals,
-        key=lambda v: (v is None or (isinstance(v, float) and np.isnan(v)), str(v)),
-    )
-    vc_dict = vc.to_dict()
-
-    values = []
-    quantity = []
-    quantity_percent = []
-    for v in sorted_vals:
-        count = int(vc_dict.get(v, 0))
-        safe_v = None if (v is None or (isinstance(v, float) and np.isnan(v))) else round_if_needed(v)
-        values.append(safe_v)
-        quantity.append(count)
-        quantity_percent.append(round_if_needed(count / total_rows * 100 if total_rows else 0))
-
-    low_duplicate_columns.append({
-        "column_name": col,
-        "type_value": reference_schema[col],
-        "unique_count": len(sorted_vals),
-        "correct_type_percent": round_if_needed(valid_counts[col] / total_rows * 100 if total_rows else 0),
-        "values": values,
-        "quantity": quantity,
-        "quantity_percent": quantity_percent,
-    })
-
-high_duplicate_columns = [
-    {
-        "column_name": col,
-        "type_value": reference_schema[col],
-        "correct_type_percent": round_if_needed(valid_counts[col] / total_rows * 100 if total_rows else 0),
-    }
-    for col in high_cardinality_column_names
-]
-
-report = {
-    "input_file": to_posix(input_file),
-    "row_count": total_rows,
-    "column_count": len(column_names),
-    "max_unique_values": max_unique_values,
-    "low_duplicate_columns": low_duplicate_columns,
-    "high_duplicate_columns": high_duplicate_columns,
-}
-
 output_dir.mkdir(parents=True, exist_ok=True)
-output_file.write_text(json.dumps(report, indent=2, ensure_ascii=False) + "\n", encoding="utf-8")
 
-print(f"Saved report: {output_file}")
+
+def main(conn):
+
+    weather_raw_quoted = quote_identifier(TABLE_WEATHER_RAW)
+    column_type_rows = conn.execute(
+        f"""
+        SELECT column_name, data_type
+        FROM information_schema.columns
+        WHERE table_name = '{TABLE_WEATHER_RAW}'
+        ORDER BY ordinal_position
+        """
+    ).fetchall()
+    columns = [row[0] for row in column_type_rows]
+    columns_types = {row[0]: str(row[1]) for row in column_type_rows}
+    total_rows = conn.execute(
+        f"SELECT count(*) FROM {weather_raw_quoted}"
+    ).fetchone()[0]
+
+    print(f"Input table: {TABLE_WEATHER_RAW}")
+    print(f"Total rows: {total_rows:,}")
+    print("Phase 1/3: Computing unique_count per column...")
+
+    columns_uniques = {}
+    for column in tqdm(columns, desc="Phase 1 unique_count", unit="col", leave=True):
+        column_quoted = quote_identifier(column)
+        unique_count_row = conn.execute(
+            f"""
+            SELECT COUNT(*)
+            FROM (
+                SELECT DISTINCT {column_quoted}
+                FROM {weather_raw_quoted}
+                LIMIT {MAX_UNIQUE_VALUES + 1}
+            )
+            """
+        ).fetchone()
+        columns_uniques[column] = int(unique_count_row[0] or 0)
+
+    low_cardinality_columns = []
+    high_cardinality_columns = []
+    for column in columns:
+        if columns_uniques[column] <= MAX_UNIQUE_VALUES:
+            low_cardinality_columns.append(column)
+        else:
+            high_cardinality_columns.append(column)
+
+    print(f"Phase 2/3: Analyzing columns...")
+    
+    # Calculate correct_type_percent for all columns
+    type_percent_map = {}
+    for column in columns:
+        column_quoted = quote_identifier(column)
+        type_value = columns_types.get(column, "")
+        correct_count = conn.execute(
+            f"""
+            SELECT COUNT(*)
+            FROM {weather_raw_quoted}
+            WHERE {column_quoted} IS NULL OR TRY_CAST({column_quoted} AS {type_value}) IS NOT NULL
+            """
+        ).fetchone()[0]
+        type_percent_map[column] = round_if_needed(correct_count * 100.0 / total_rows if total_rows else 0)
+
+    low_duplicate_columns = []
+    for column in tqdm(low_cardinality_columns, desc="Phase 2 low-cardinality", unit="col", leave=True):
+        column_quoted = quote_identifier(column)
+        rows = conn.execute(
+            f"""
+            SELECT {column_quoted}, COUNT(*)
+            FROM {weather_raw_quoted}
+            GROUP BY {column_quoted}
+            """
+        ).fetchall()
+        # Sort values: Null first, then by string representation
+        sorted_rows = sorted(rows, key=lambda x: (x[0] is None, str(x[0])))
+        
+        values = []
+        counts = []
+        percentages = []
+        for val, count in sorted_rows:
+            values.append(round_if_needed(val))
+            counts.append(count)
+            percentages.append(round_if_needed(count * 100.0 / total_rows if total_rows else 0))
+        
+        low_duplicate_columns.append({
+            "column_name": column,
+            "type_value": columns_types[column],
+            "unique_count": columns_uniques[column],
+            "correct_type_percent": type_percent_map[column],
+            "values": values,
+            "quantity": counts, # Keep key same as original for 03 consistency
+            "quantity_percent": percentages,
+        })
+
+    high_duplicate_columns = [
+        {
+            "column_name": col,
+            "type_value": columns_types[col],
+            "correct_type_percent": type_percent_map[col],
+        }
+        for col in high_cardinality_columns
+    ]
+
+    print("Phase 3/3: Writing JSON report...")
+    report = {
+        "warehouse_db_file": WAREHOUSE_DB_FILE.as_posix(),
+        "input_table": TABLE_WEATHER_RAW,
+        "row_count": total_rows,
+        "column_count": len(columns),
+        "max_unique_values": MAX_UNIQUE_VALUES,
+        "low_duplicate_columns": low_duplicate_columns,
+        "high_duplicate_columns": high_duplicate_columns,
+    }
+
+    output_file.write_text(json.dumps(report, indent=2, ensure_ascii=False) + "\n", encoding="utf-8")
+    print(f"Saved report: {output_file}")

@@ -7,16 +7,17 @@ __pycache__/
 .DS_Store
 Thumbs.db
 *.log
-.vscode/
 
 # Environment and secrets
 .venv/
-venv/
+.vscode/
 .env
 
 # Directories to ignore
-txt/
+data/
 test/
+txt/
+
 
 # Data files
 *.parquet
@@ -24,7 +25,4 @@ test/
 *.json
 *.html
 *.txt
-
-# Exception: keep this specific CSV file
-!pipeline/weather/raw/NYC_Central_Park_weather_1869-2022.csv
-
+*.db

@@ -46,7 +46,7 @@ TLC chỉ ghi nhận tiền Tip tự động thông qua thẻ tín dụng.
 - **Quy tắc**: Nếu `payment_type` không thuộc `{1}` (Thẻ tín dụng), hệ thống sẽ buộc `tip_amount = 0` để tránh các sai số ghi nhận thủ công cho các lượt Cash/Dispute/Free.
 
 ### Rule 3: Lọc ngoại lai động (Dynamic Outlier Cutting)
-Sử dụng script **EDA 11** để quét dữ liệu và tìm điểm rơi phân bổ tự nhiên. Script `05_apply_upper_bounds.py` sẽ tự động kích hoạt `11_simulate_upper_bounds.py` nếu thiếu file kết quả mô phỏng.
+Sử dụng script **EDA 11** để quét dữ liệu và tìm điểm rơi phân bổ tự nhiên. Script `04_apply_upper_bounds.py` sẽ tự động kích hoạt `11_simulate_upper_bounds.py` nếu thiếu file kết quả mô phỏng.
 
 ---
 
@@ -54,15 +54,17 @@ Sử dụng script **EDA 11** để quét dữ liệu và tìm điểm rơi phâ
 
 Quy trình ETL bao gồm 6 giai đoạn chính:
 
-1. **`01_download_yellow_taxi_2019.py`**: Tải 12 file dữ liệu thô hàng tháng từ Cloudfront TLC.
-2. **`02_merge_parquet_2019.py`**: Gộp dữ liệu năm và lọc chỉ giữ lại bản ghi thực sự của 2019.
-3. **`03_drop_airport_fee.py`**: Xóa cột `airport_fee` (không mang giá trị trong tập dữ liệu 2019).
-4. **`04_apply_business_rules.py`**: Áp dụng các luật xử lý tiền và lọc Business Rules nền tảng.
-5. **`05_apply_upper_bounds.py`**: Cắt bỏ các kỷ lục giao dịch ảo hoặc phi lý (Outlier Cut).
-6. **`06_optimize_dtypes.py`**:
+1. **`01_download_yellow_tripdata.py`**: Tải 12 file dữ liệu thô hàng tháng từ Cloudfront TLC.
+2. **`02_ingest_data.py`**: Nạp toàn bộ 12 file vào bảng DuckDB `taxi_raw`.
+3. **`03_apply_business_rules.py`**:
+    - Lọc bản ghi đúng năm 2019 và điều kiện `pickup < dropoff`.
+    - Loại bỏ cột `airport_fee`.
+    - Áp dụng toàn bộ business rules nền tảng vào view trung gian.
+4. **`04_apply_upper_bounds.py`**: Cắt bỏ các kỷ lục giao dịch ảo hoặc phi lý (Outlier Cut).
+5. **`05_optimize_dtypes.py`**:
     - Ép lại kiểu dữ liệu để đạt hiệu quả nén cao nhất (~20%).
     - Kết quả được lưu song song tại:
-        - `etl/results/06_optimize_dtypes.parquet`
+        - bảng DuckDB `taxi_clean`
         - `clean/cleaned_tripdata_2019.parquet`
 
 ---

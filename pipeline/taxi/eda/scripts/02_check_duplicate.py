@@ -1,242 +1,208 @@
-# -*- coding: utf-8 -*-
 import json
-
-from pathlib import Path
-
-import pyarrow as pa
-import pyarrow.compute as pc
-import pyarrow.parquet as pq
 from tqdm import tqdm
+from pipeline.services.helpers import round_if_needed
+from pipeline.services.queries import quote_identifier, connect_and_check, calculate_correct_type_percent
+from pipeline.services.tables import TABLE_TAXI_RAW
+from pipeline.services.paths import TAXI_DIR, WAREHOUSE_DB_FILE
 
 
-taxi_root = Path(__file__).resolve().parents[2]
-input_file = taxi_root / "etl" / "results" / "02_merge_parquet_2019.parquet"
-max_unique_values = 300
-output_dir = taxi_root / "eda" / "results"
+MAX_UNIQUE_VALUES = 300
+output_dir = TAXI_DIR / "eda" / "results"
 output_file = output_dir / "02_check_duplicate.json"
-schema_file = output_dir / "01_check_parquet_schema.json"
+output_dir.mkdir(parents=True, exist_ok=True)
 
 
-def to_posix(path: Path) -> str:
-    return path.as_posix()
+def main(conn):
+    taxi_raw_quoted = quote_identifier(TABLE_TAXI_RAW)
+    column_type_rows = conn.execute(
+        f"""
+        SELECT column_name, data_type
+        FROM information_schema.columns
+        WHERE table_name = '{TABLE_TAXI_RAW}'
+        ORDER BY ordinal_position
+        """
+    ).fetchall()
+    columns = [row[0] for row in column_type_rows]
+    columns_types = {row[0]: str(row[1]) for row in column_type_rows}
+    total_rows = conn.execute(
+        f"SELECT count(*) FROM {taxi_raw_quoted}"
+    ).fetchone()[0]
+
+    print(f"Input table: {TABLE_TAXI_RAW}")
+    print(f"Total rows: {total_rows:,}")
+    print("Phase 1/3: Computing unique_count per column...")
+
+    columns_uniques = {}
+    for column in tqdm(columns, desc="Phase 1 unique_count", unit="col", leave=True):
+        column_quoted = quote_identifier(column)
+        unique_count = conn.execute(
+            f"""
+            SELECT COUNT(*)
+            FROM (
+                SELECT DISTINCT {column_quoted}
+                FROM {taxi_raw_quoted}
+                LIMIT {MAX_UNIQUE_VALUES + 1}
+            )
+            """
+        ).fetchone()[0]
+        columns_uniques[column] = int(unique_count or 0)
 
 
-def round_if_needed(value):
-    if isinstance(value, float):
-        rounded_value = round(value, 2)
-        if rounded_value != value:
-            return rounded_value
-    return value
+    low_cardinality_columns = []
+    high_cardinality_columns = []
+    for column in columns:
+        unique_count = columns_uniques[column]
+        if unique_count <= MAX_UNIQUE_VALUES:
+            low_cardinality_columns.append(column)
+        else:
+            high_cardinality_columns.append(column)
 
 
-def false_mask(length):
-    return pa.array([False] * length, type=pa.bool_())
+    print(
+        "Phase 2/3: Counting values for low-cardinality columns "
+        f"({len(low_cardinality_columns)}/{len(columns)})..."
+    )
+    
+    # Batch process low cardinality columns
+    low_duplicate_columns = []
+    
+    # First, batch calculate correct_type_percent for all low cardinality columns
+    type_percent_query = """
+    SELECT 
+        column_name,
+        correct_type_percent
+    FROM (
+    """
+    
+    type_percent_clauses = []
+    for column in low_cardinality_columns:
+        column_quoted = quote_identifier(column)
+        type_value = columns_types.get(column, "")
+        type_percent_clauses.append(
+            f"""
+            SELECT 
+                '{column}' as column_name,
+                ROUND(COUNT(*) FILTER (
+                    WHERE {column_quoted} IS NULL OR 
+                    TRY_CAST({column_quoted} AS {type_value}) IS NOT NULL
+                ) * 100.0 / {total_rows}, 2) as correct_type_percent
+            FROM {taxi_raw_quoted}
+            """
+        )
+    
+    type_percent_query += " UNION ALL ".join(type_percent_clauses) + """
+    )
+    """
+    
+    type_percent_rows = conn.execute(type_percent_query).fetchall()
+    type_percent_map = {row[0]: row[1] for row in type_percent_rows}
+    
+    # Now process each column for value counts
+    for column in tqdm(
+        low_cardinality_columns,
+        desc="Phase 2 value_counts",
+        unit="col",
+        leave=True,
+    ):
+        column_quoted = quote_identifier(column)
+        rows = conn.execute(
+            f"""
+            SELECT {column_quoted}, COUNT(*)
+            FROM {taxi_raw_quoted}
+            GROUP BY {column_quoted}
+            """
+        ).fetchall()
+        sorted_rows = sorted(rows, key=lambda x: (x[0] is None, str(x[0])))
+        
+        values = []
+        counts = []
+        percentages = []
+        for value, count in sorted_rows:
+            values.append(round_if_needed(value))
+            counts.append(count)
+            percentages.append(
+                round_if_needed((count / total_rows * 100))
+            )
+        
+        type_value = columns_types.get(column, "")
+        unique_count = columns_uniques[column]
+        correct_type_percent = type_percent_map.get(column, 0.0)
 
-
-def valid_int_mask(column):
-    length = len(column)
-
-    if pa.types.is_integer(column.type):
-        return pc.fill_null(pc.is_valid(column), False)
-
-    if pa.types.is_floating(column.type):
-        is_valid = pc.fill_null(pc.is_valid(column), False)
-        is_nan = pc.fill_null(pc.is_nan(column), False)
-        not_nan = pc.invert(is_nan)
-        truncated = pc.trunc(column)
-        is_integer_like = pc.fill_null(pc.equal(column, truncated), False)
-        return pc.and_(is_valid, pc.and_(not_nan, is_integer_like))
-
-    if pa.types.is_string(column.type) or pa.types.is_large_string(column.type):
-        trimmed = pc.utf8_trim_whitespace(column)
-        is_valid = pc.fill_null(pc.is_valid(column), False)
-        is_not_blank = pc.fill_null(pc.not_equal(trimmed, ""), False)
-        casted = pc.cast(trimmed, pa.int64(), safe=False)
-        cast_valid = pc.fill_null(pc.is_valid(casted), False)
-        return pc.and_(is_valid, pc.and_(is_not_blank, cast_valid))
-
-    return false_mask(length)
-
-
-def valid_float_mask(column):
-    length = len(column)
-
-    if pa.types.is_integer(column.type) or pa.types.is_floating(column.type):
-        is_valid = pc.fill_null(pc.is_valid(column), False)
-
-        if pa.types.is_floating(column.type):
-            is_nan = pc.fill_null(pc.is_nan(column), False)
-            return pc.and_(is_valid, pc.invert(is_nan))
-
-        return is_valid
-
-    if pa.types.is_string(column.type) or pa.types.is_large_string(column.type):
-        trimmed = pc.utf8_trim_whitespace(column)
-        is_valid = pc.fill_null(pc.is_valid(column), False)
-        is_not_blank = pc.fill_null(pc.not_equal(trimmed, ""), False)
-        casted = pc.cast(trimmed, pa.float64(), safe=False)
-        cast_valid = pc.fill_null(pc.is_valid(casted), False)
-        return pc.and_(is_valid, pc.and_(is_not_blank, cast_valid))
-
-    return false_mask(length)
-
-
-def valid_string_mask(column):
-    if pa.types.is_string(column.type) or pa.types.is_large_string(column.type):
-        return pc.fill_null(pc.is_valid(column), False)
-
-    return false_mask(len(column))
-
-
-def valid_datetime_mask(column):
-    if pa.types.is_timestamp(column.type):
-        return pc.fill_null(pc.is_valid(column), False)
-
-    if pa.types.is_string(column.type) or pa.types.is_large_string(column.type):
-        trimmed = pc.utf8_trim_whitespace(column)
-        is_valid = pc.fill_null(pc.is_valid(column), False)
-        is_not_blank = pc.fill_null(pc.not_equal(trimmed, ""), False)
-        parsed = pc.strptime(trimmed, format="%Y-%m-%d %H:%M:%S.%f", unit="us", error_is_null=True)
-        parsed_valid = pc.fill_null(pc.is_valid(parsed), False)
-        return pc.and_(is_valid, pc.and_(is_not_blank, parsed_valid))
-
-    return false_mask(len(column))
-
-
-def valid_null_mask(column):
-    return pc.fill_null(pc.is_null(column), False)
-
-
-def get_valid_mask(column, expected_type):
-    if expected_type in {"int8", "int16", "int32", "int64"}:
-        return valid_int_mask(column)
-
-    if expected_type in {"float", "float32", "float64", "double"}:
-        return valid_float_mask(column)
-
-    if expected_type == "string":
-        return valid_string_mask(column)
-
-    if expected_type.startswith("timestamp"):
-        return valid_datetime_mask(column)
-
-    if expected_type == "null":
-        return valid_null_mask(column)
-
-    return pc.fill_null(pc.is_valid(column), False)
-
-
-parquet = pq.ParquetFile(input_file)
-schema = parquet.schema_arrow
-column_names = schema.names
-unique_values_by_column = {column_name: set() for column_name in column_names}
-total_rows = 0
-low_cardinality_column_names = []
-high_cardinality_column_names = []
-valid_counts = {column_name: 0 for column_name in column_names}
-active_unique_columns = set(column_names)
-
-schema_report = json.loads(schema_file.read_text(encoding="utf-8"))
-
-reference_schema = schema_report["reference_schema"]
-row_group_count = parquet.metadata.num_row_groups
-progress_kwargs = {
-    "unit": "group",
-    "leave": True,
-    "dynamic_ncols": True,
-    "mininterval": 0.2,
-}
-
-with tqdm(total=row_group_count, desc="Checking unique values by column", **progress_kwargs) as progress_bar:
-    for row_group_index in range(row_group_count):
-        table = parquet.read_row_group(row_group_index)
-        total_rows += table.num_rows
-
-        for column_name in column_names:
-            expected_type = reference_schema.get(column_name)
-            valid_mask = get_valid_mask(table[column_name], expected_type)
-            valid_counts[column_name] += pc.sum(pc.cast(valid_mask, "int64")).as_py() or 0
-
-        for column_name in list(active_unique_columns):
-            current_unique_values = unique_values_by_column[column_name]
-
-            unique_values = pc.unique(table[column_name]).to_pylist()
-            current_unique_values.update(unique_values)
-
-            if len(current_unique_values) > max_unique_values:
-                active_unique_columns.remove(column_name)
-
-        progress_bar.update(1)
-
-for column_name in column_names:
-    unique_count = len(unique_values_by_column[column_name])
-
-    if unique_count <= max_unique_values:
-        low_cardinality_column_names.append(column_name)
-    else:
-        high_cardinality_column_names.append(column_name)
-
-value_counts_by_column = {
-    column_name: {value: 0 for value in unique_values_by_column[column_name]}
-    for column_name in low_cardinality_column_names
-}
-
-if low_cardinality_column_names:
-    with tqdm(total=row_group_count, desc="Counting low-cardinality values", **progress_kwargs) as progress_bar:
-        for row_group_index in range(row_group_count):
-            table = parquet.read_row_group(row_group_index, columns=low_cardinality_column_names)
-
-            for column_name in low_cardinality_column_names:
-                for value in table[column_name].to_pylist():
-                    value_counts_by_column[column_name][value] += 1
-
-            progress_bar.update(1)
-
-low_duplicate_columns = []
-for column_name in low_cardinality_column_names:
-    unique_values = unique_values_by_column[column_name]
-    sorted_values = sorted(unique_values, key=lambda value: (value is None, str(value)))
-    values = []
-    quantity = []
-    quantity_percent = []
-
-    for value in sorted_values:
-        count = value_counts_by_column[column_name][value]
-        values.append(round_if_needed(value))
-        quantity.append(count)
-        quantity_percent.append(
-            round_if_needed((count / total_rows * 100) if total_rows else 0)
+        low_duplicate_columns.append(
+            {
+                "column_name": column,
+                "type_value": type_value,
+                "unique_count": unique_count,
+                "correct_type_percent": correct_type_percent,
+                "values": values,
+                "counts": counts,
+                "percentages": percentages,
+            }
         )
 
-    low_duplicate_columns.append({
-        "column_name": column_name,
-        "type_value": reference_schema.get(column_name),
-        "unique_count": len(unique_values),
-        "correct_type_percent": round_if_needed((valid_counts[column_name] / total_rows * 100) if total_rows else 0),
-        "values": values,
-        "quantity": quantity,
-        "quantity_percent": quantity_percent,
-    })
 
-high_duplicate_columns = [
-    {
-        "column_name": column_name,
-        "type_value": reference_schema.get(column_name),
-        "correct_type_percent": round_if_needed((valid_counts[column_name] / total_rows * 100) if total_rows else 0),
+    # Batch calculate correct_type_percent for high cardinality columns
+    high_duplicate_columns = []
+    
+    if high_cardinality_columns:
+        high_type_percent_query = """
+        SELECT 
+            column_name,
+            correct_type_percent
+        FROM (
+        """
+        
+        high_type_percent_clauses = []
+        for column in high_cardinality_columns:
+            column_quoted = quote_identifier(column)
+            type_value = columns_types.get(column, "")
+            high_type_percent_clauses.append(
+                f"""
+                SELECT 
+                    '{column}' as column_name,
+                    ROUND((COUNT(*) FILTER (
+                        WHERE {column_quoted} IS NULL OR 
+                        TRY_CAST({column_quoted} AS {type_value}) IS NOT NULL
+                    ) * 100.0 / {total_rows}), 2) as correct_type_percent
+                FROM {taxi_raw_quoted}
+                """
+            )
+        
+        high_type_percent_query += " UNION ALL ".join(high_type_percent_clauses) + """
+        )
+        """
+        
+        high_type_percent_rows = conn.execute(high_type_percent_query).fetchall()
+        high_type_percent_map = {row[0]: row[1] for row in high_type_percent_rows}
+        
+        for column in high_cardinality_columns:
+            type_value = columns_types.get(column, "")
+            correct_type_percent = high_type_percent_map.get(column, 0.0)
+            
+            high_duplicate_columns.append(
+                {
+                    "column_name": column,
+                    "type_value": type_value,
+                    "correct_type_percent": correct_type_percent,
+                }
+            )
+
+
+    print("Phase 3/3: Writing JSON report...")
+    report = {
+        "warehouse_db_file": WAREHOUSE_DB_FILE.as_posix(),
+        "input_table": TABLE_TAXI_RAW,
+        "max_unique_values": MAX_UNIQUE_VALUES,
+        "total_rows": total_rows,
+        "low_duplicate_columns": low_duplicate_columns,
+        "high_duplicate_columns": high_duplicate_columns,
     }
-    for column_name in high_cardinality_column_names
-]
 
-report = {
-    "input_file": to_posix(input_file),
-    "schema_file": to_posix(schema_file),
-    "max_unique_values": max_unique_values,
-    "total_rows": total_rows,
-    "low_duplicate_columns": low_duplicate_columns,
-    "high_duplicate_columns": high_duplicate_columns,
-}
-
-output_dir.mkdir(parents=True, exist_ok=True)
-output_file.write_text(json.dumps(report, indent=2, ensure_ascii=False) + "\n", encoding="utf-8")
-
-print(f"Saved report: {output_file}")
+    output_file.write_text(
+        json.dumps(
+            report,
+            indent=2,
+            ensure_ascii=False
+        ), encoding="utf-8"
+    )
+    print(f"Saved report: {output_file}")

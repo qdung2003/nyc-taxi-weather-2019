@@ -1,11 +1,10 @@
-# -*- coding: utf-8 -*-
 import json
 from pathlib import Path
+from pipeline.services.paths import WEATHER_DIR
 
 
-weather_root = Path(__file__).resolve().parents[2]
-input_file = weather_root / "eda" / "results" / "04_check_duplicate.json"
-output_file = weather_root / "eda" / "results" / "05_all_columns_profile.html"
+input_file = WEATHER_DIR / "eda" / "results" / "04_check_duplicate.json"
+output_file = WEATHER_DIR / "eda" / "results" / "05_all_columns_profile.html"
 
 
 def load_json(path: Path):
@@ -250,7 +249,7 @@ def main() -> None:
       if (hasTempScale) {{
         const x00 = xForTempValue(0);
         let yCurve = margin.top + plotH;
-        
+
         // Find or interpolate count at value 0
         const idxGreater = bins.findIndex(b => Number(b.value) >= 0);
         if (idxGreater === 0) {{
@@ -313,7 +312,7 @@ def main() -> None:
           const pts = bins.map((b, idx) => `${{pointX(idx)}},${{pointY(b.count)}}`);
           const linePts = pts.join(' ');
           const polyPts = `${{pointX(0)}},${{yBase}} ` + linePts + ` ${{pointX(bins.length-1)}},${{yBase}}`;
-          
+
           const isAllNeg = bins.every(b => typeof b.value === 'number' && Number(b.value) < 0);
           const fillCol = isAllNeg ? '#fecaca' : '#93c5fd';
           const strokeCol = isAllNeg ? '#dc2626' : '#1d4ed8';
@@ -376,12 +375,12 @@ def main() -> None:
           const y = margin.top + plotH - h;
           const isNegative = typeof b.value === 'number' && b.value < 0;
           svg.appendChild(mk('rect', {{ x, y, width: barW, height: h, fill: isNegative ? '#dc2626' : '#1d4ed8', rx: 3, ry: 3 }}));
-          
+
           const tPct = mk('text', {{ x: xCenter, y: y - 6, 'text-anchor': 'middle', 'font-size': 9, fill: '#0f172a' }});
           tPct.textContent = Number(b.percent).toFixed(1) + '%';
           svg.appendChild(tPct);
         }});
-        
+
         if (hasTempScale) {{
           const x0 = xForTempValue(0);
           // Find or interpolate count at value 0 (for the axis split)

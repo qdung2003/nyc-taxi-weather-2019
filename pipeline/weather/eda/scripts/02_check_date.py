@@ -1,58 +1,66 @@
-# -*- coding: utf-8 -*-
 import json
-import pandas as pd
-from pathlib import Path
+from pipeline.services.queries import quote_identifier
+from pipeline.services.tables import TABLE_WEATHER_RAW
+from pipeline.services.paths import WEATHER_DIR, WAREHOUSE_DB_FILE
 
 
-weather_root = Path(__file__).resolve().parents[2]
-input_file = weather_root / "etl" / "results" / "01_get_weather_2019.csv"
-output_dir = weather_root / "eda" / "results"
+output_dir = WEATHER_DIR / "eda" / "results"
 output_file = output_dir / "02_check_date.json"
 
 
-def to_posix(path: Path) -> str:
-    return path.as_posix()
+def main(conn) -> None:
 
+    weather_raw_quoted = quote_identifier(TABLE_WEATHER_RAW)
+    column_name = "DATE"
+    column_quoted = quote_identifier(column_name)
 
-# Read the CSV with DATE parsed
-df = pd.read_csv(input_file, parse_dates=["DATE"])
-total_rows = len(df)
-column_name = "DATE"
+    print(f"Analyzing {column_name} in {TABLE_WEATHER_RAW}...")
+    
+    stats = conn.execute(
+        f"""
+        SELECT 
+            COUNT(*) as total_rows,
+            COUNT(DISTINCT {column_quoted}) as unique_count,
+            MIN({column_quoted}) as min_date,
+            MAX({column_quoted}) as max_date
+        FROM {weather_raw_quoted}
+        """
+    ).fetchone()
 
-# Analysis
-unique_dates = df[column_name].dt.date.unique()
-unique_count = len(unique_dates)
-min_date = min(unique_dates)
-max_date = max(unique_dates)
+    total_rows, unique_count, min_date, max_date = stats
+    
+    # Check for uniqueness (no duplicates)
+    is_unique = (unique_count == total_rows)
+    
+    # Check for full year 2019 (365 days) - Note: This script checks raw data which has more years
+    # So we check if 2019-01-01 and 2019-12-31 exist and have 365 unique dates in between
+    year_2019_stats = conn.execute(
+        f"""
+        SELECT COUNT(DISTINCT {column_quoted})
+        FROM {weather_raw_quoted}
+        WHERE {column_quoted} >= '2019-01-01' AND {column_quoted} <= '2019-12-31'
+        """
+    ).fetchone()
+    
+    count_2019 = year_2019_stats[0]
+    is_full_year_2019 = (count_2019 == 365)
 
-# Check for full year 2019 (365 days)
-is_full_year = (
-    unique_count == 365 and
-    min_date.year == 2019 and
-    max_date.year == 2019 and
-    min_date.month == 1 and
-    min_date.day == 1 and
-    max_date.month == 12 and
-    max_date.day == 31
-)
-
-# Check for uniqueness (no duplicates)
-is_unique = (unique_count == total_rows)
-
-report = {
-    "input_file": to_posix(input_file),
-    "date_dimension_check": {
-        "column_name": column_name,
-        "total_rows": total_rows,
-        "unique_count": unique_count,
-        "min_date": min_date.strftime("%Y-%m-%d"),
-        "max_date": max_date.strftime("%Y-%m-%d"),
-        "is_unique": "yes" if is_unique else "no",
-        "full_year": "yes" if is_full_year else "no"
+    report = {
+        "warehouse_db_file": WAREHOUSE_DB_FILE.as_posix(),
+        "input_table": TABLE_WEATHER_RAW,
+        "date_dimension_check": {
+            "column_name": column_name,
+            "total_rows": total_rows,
+            "unique_count": unique_count,
+            "min_date": min_date.strftime("%Y-%m-%d") if min_date else None,
+            "max_date": max_date.strftime("%Y-%m-%d") if max_date else None,
+            "is_unique": "yes" if is_unique else "no",
+            "full_year_2019": "yes" if is_full_year_2019 else "no",
+            "unique_count_2019": count_2019
+        }
     }
-}
 
-output_dir.mkdir(parents=True, exist_ok=True)
-output_file.write_text(json.dumps(report, indent=2, ensure_ascii=False) + "\n", encoding="utf-8")
+    output_dir.mkdir(parents=True, exist_ok=True)
+    output_file.write_text(json.dumps(report, indent=2, ensure_ascii=False) + "\n", encoding="utf-8")
 
-print(f"Saved report: {output_file}")
+    print(f"Saved report: {output_file}")

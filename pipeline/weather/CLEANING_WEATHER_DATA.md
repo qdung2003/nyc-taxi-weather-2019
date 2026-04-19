@@ -36,23 +36,25 @@ Dữ liệu được tham chiếu từ bộ dữ liệu lịch sử của Trạm
 
 ## 4. Luồng thực thi Scripts
 
-Quy trình ETL cho dữ liệu thời tiết bao gồm 2 bước chính:
+Quy trình ETL cho dữ liệu thời tiết (đã đồng bộ với mảng Taxi dùng DuckDB) bao gồm 4 bước chính:
 
-1. **`01_get_weather_2019.py`**:
-    - Đọc file CSV thô từ `raw/NYC_Central_Park_weather_1869-2022.csv`.
-    - Lọc và trích xuất chỉ duy nhất các bản ghi của năm **2019**.
-    - Kết quả lưu tại: `etl/results/01_get_weather_2019.csv`.
+1. **`01_download_weather.py`**:
+    - Tải nguyên bản CSV thô từ online vào thư mục data runtime (`DATA_DIR/NYC_Central_Park_weather_1869-2022.csv`).
 
-2. **`02_convert_type.py`**:
-    - Áp dụng các **Business Rules** (lọc giá trị âm, lọc giá trị phi thực tế).
-    - Thực hiện chuyển đổi đơn vị và làm tròn số liệu.
-    - Ép kiểu dữ liệu về `float32` để tối ưu dung lượng.
-    - Kết quả lưu song song tại:
-        - `etl/results/02_convert_type.parquet`
-        - `clean/cleaned_weather_2019.parquet`
+2. **`02_ingest_data.py`**:
+    - Sử dụng `read_csv_auto` của DuckDB để ingest trực tiếp CSV vào bảng thô `TABLE_WEATHER_RAW` trong cơ sở dữ liệu `taxi_and_weather.db`.
+
+3. **`03_apply_business_rules.py`**:
+    - Nhận vào từ bảng `TABLE_WEATHER_RAW` và thiết lập VIEW `v_weather_03_business_rules`.
+    - Áp dụng các **Business Rules** (lọc dòng ngày tháng thuộc 2019, bỏ các ô null, lọc giá trị âm, và chặn giá trị phi thực tế).
+    - Thực hiện quy đổi hệ đơn vị đo lường (Inch sang Cm, độ Fahrenheit sang Celsius) và làm tròn 2 chữ số thập phân hoàn toàn bằng các tính năng SQL bên trong CTEs.
+
+4. **`04_optimize_dtypes.py`**:
+    - Ép định dạng khắt khe (`CAST`) từ view sang bảng vật lý đích `TABLE_WEATHER_CLEAN`.
+    - Các metric đo đạc tự động mang chuẩn `FLOAT`, tối ưu cực đỉnh trong RAM.
 
 ---
 
 ## 5. Chiến lược tối ưu hóa kiểu dữ liệu (Dtypes)
 
-Dữ liệu thời tiết được lưu trữ dưới định dạng **Parquet** với kiểu dữ liệu `float32`. Việc này giúp giảm kích thước file và tăng tốc độ xử lý khi thực hiện các phép tính tương quan (correlation) giữa thời tiết và lưu lượng Taxi ở các bước phân tích sâu hơn.
+Thay vì xuất file **Parquet** thuần túy chứa float32 rời rạc, mọi cột dữ liệu sạch giờ đây được lưu đồng thời ngay trong File Database gốc **DuckDB** (`TABLE_WEATHER_CLEAN`) cùng tầng với dữ liệu mảng Taxi. Các biến metric gán chuẩn `FLOAT` giúp hệ thống truy vấn được cô đọng, triệt tiêu I/O đọc rời các mảnh parquet trung gian nhằm đẩy nhanh siêu tốc độ xử lý khi thực hiện các phép join và tập trung tính tương quan (correlation factor) giữa lưu lượng Taxi và thời tiết ở các bước phân tích sau đó!

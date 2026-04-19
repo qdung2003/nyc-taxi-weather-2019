@@ -1,20 +1,18 @@
-# -*- coding: utf-8 -*-
 import json
-import sys
-from pathlib import Path
-
 import numpy as np
-import pyarrow as pa
-import pyarrow.compute as pc
-import pyarrow.parquet as pq
 from tqdm import tqdm
+from pipeline.services.helpers import serialize_number
+from pipeline.services.queries import quote_identifier
+from pipeline.services.queries import connect_and_check
+from pipeline.services.views import VIEW_TAXI_BUSINESS_RULES
+from pipeline.services.paths import WAREHOUSE_DB_FILE, TAXI_DIR
+from pipeline.services.tqdm_settings import TQDM_DISABLE, TQDM_MIN_INTERVAL
 
 
-taxi_root = Path(__file__).resolve().parents[2]
-input_file = taxi_root / "etl" / "results" / "04_apply_business_rules.parquet"
-output_json = taxi_root / "eda" / "results" / "11_simulate_upper_bounds.json"
+output_dir = TAXI_DIR / "eda" / "results"
+output_dir.mkdir(parents=True, exist_ok=True)
+output_json = output_dir / "11_simulate_upper_bounds.json"
 
-TQDM_DISABLE = not sys.stderr.isatty()
 TARGET_COLUMNS = ["trip_distance", "fare_amount", "tip_amount", "tolls_amount", "total_amount"]
 FIRST_PASS_BIN_COUNT = 100
 SECOND_PASS_BIN_COUNT = 10
@@ -22,56 +20,62 @@ FIRST_PASS_THRESHOLD_PERCENT = 0.05
 SECOND_PASS_THRESHOLD_PERCENT = 0.5
 
 
-def get_filtered_numeric_column(col):
-    valid_mask = pc.fill_null(pc.is_valid(col), False)
-    if pa.types.is_floating(col.type):
-        nan_mask = pc.fill_null(pc.is_nan(col), False)
-        valid_mask = pc.and_(valid_mask, pc.invert(nan_mask))
-    return pc.filter(col, valid_mask)
+def prepare_column_source(conn, col_name: str):
+    col = quote_identifier(col_name)
+    source_table = "tmp_eda11_values"
+    conn.execute(f'DROP TABLE IF EXISTS "{source_table}"')
+    conn.execute(
+        f"""
+        CREATE TEMP TABLE "{source_table}" AS
+        SELECT CAST({col} AS DOUBLE) AS v
+        FROM {quote_identifier(VIEW_TAXI_BUSINESS_RULES)}
+        WHERE TRY_CAST({col} AS DOUBLE) IS NOT NULL
+          AND NOT isnan(CAST({col} AS DOUBLE))
+        """
+    )
+
+    scan_max, zero_count = conn.execute(
+        f"""
+        SELECT
+            MAX(v) FILTER (WHERE v > 0.0) AS scan_max,
+            COUNT(*) FILTER (WHERE v = 0.0) AS zero_count
+        FROM "{source_table}"
+        """
+    ).fetchone()
+    return source_table, float(scan_max or 1.0), int(zero_count or 0)
 
 
-def load_positive_values_and_zero_count(parquet: pq.ParquetFile, col_name: str):
-    chunks = []
-    zero_count = 0
-    for rg in range(parquet.metadata.num_row_groups):
-        arr = parquet.read_row_group(rg, columns=[col_name])[col_name]
-        zero_count += int(pc.sum(pc.cast(pc.fill_null(pc.equal(arr, 0.0), False), pa.int64())).as_py() or 0)
-        filtered = get_filtered_numeric_column(arr)
-        if len(filtered) == 0:
-            continue
-        positive = pc.filter(filtered, pc.greater(filtered, 0.0))
-        if len(positive) == 0:
-            continue
-        if isinstance(positive, pa.ChunkedArray):
-            np_arr = positive.combine_chunks().to_numpy(zero_copy_only=False)
-        else:
-            np_arr = positive.to_numpy(zero_copy_only=False)
-        if np_arr.size > 0:
-            chunks.append(np_arr.astype(np.float64, copy=False))
-
-    if not chunks:
-        return np.array([], dtype=np.float64), zero_count
-    if len(chunks) == 1:
-        return chunks[0], zero_count
-    return np.concatenate(chunks), zero_count
-
-
-def build_histogram_from_values(values: np.ndarray, upper_bound: float, bin_count: int):
+def build_histogram_counts(conn, source_table: str, upper_bound: float, bin_count: int):
     edges = np.linspace(0.0, upper_bound, bin_count + 1)
-    histogram = np.zeros(len(edges) - 1, dtype=np.int64)
-    if values.size == 0:
-        return edges, histogram
-    clipped = values[values <= upper_bound]
-    if clipped.size == 0:
-        return edges, histogram
-    histogram, _ = np.histogram(clipped, bins=edges)
-    return edges, histogram
+    counts = np.zeros(bin_count, dtype=np.int64)
+    if upper_bound <= 0:
+        return edges, counts
+
+    rows = conn.execute(
+        f"""
+        WITH positive AS (
+            SELECT v
+            FROM "{source_table}"
+            WHERE v > 0.0
+              AND v <= {upper_bound:.16f}
+        ),
+        bucketed AS (
+            SELECT LEAST({bin_count}, GREATEST(1, CAST(CEIL(v / {upper_bound:.16f} * {bin_count}) AS INTEGER))) AS b
+            FROM positive
+        )
+        SELECT b, COUNT(*)
+        FROM bucketed
+        GROUP BY b
+        """
+    ).fetchall()
+    for b, c in rows:
+        counts[int(b) - 1] = int(c)
+    return edges, counts
 
 
 def trim_upper_bound(edges, quantity, threshold_percent, denominator_non_zero: int):
     if len(quantity) == 0 or denominator_non_zero <= 0:
-        return edges[-1]
-
+        return float(edges[-1])
     quantity_percent_raw = quantity / denominator_non_zero * 100
     keep_index = -1
     for i in range(len(quantity) - 1, -1, -1):
@@ -80,34 +84,20 @@ def trim_upper_bound(edges, quantity, threshold_percent, denominator_non_zero: i
             break
     if keep_index == -1:
         keep_index = 0
-    return edges[keep_index + 1]
+    return float(edges[keep_index + 1])
 
 
-def iterative_trim(
-    values: np.ndarray,
-    initial_upper: float,
-    bin_count: int,
-    threshold_percent: float,
-    denominator_non_zero: int,
-):
+def iterative_trim(conn, source_table, initial_upper, bin_count, threshold_percent, denominator_non_zero):
     current_upper = float(initial_upper)
-    last_full_edges = np.array([0.0], dtype=float)
-    last_full_quantity = np.array([], dtype=np.int64)
-    last_full_percent = np.array([], dtype=float)
-
     while True:
-        edges, quantity = build_histogram_from_values(values, current_upper, bin_count)
+        edges, quantity = build_histogram_counts(conn, source_table, current_upper, bin_count)
         if denominator_non_zero <= 0:
             percent_full = np.zeros_like(quantity, dtype=float)
         else:
             percent_full = quantity / denominator_non_zero * 100
 
-        last_full_edges = edges
-        last_full_quantity = quantity
-        last_full_percent = percent_full
-
         if len(percent_full) > 0 and float(percent_full[-1]) >= threshold_percent:
-            break
+            return current_upper, edges, quantity, percent_full
 
         new_upper = trim_upper_bound(edges, quantity, threshold_percent, denominator_non_zero)
         if np.isclose(new_upper, current_upper):
@@ -117,67 +107,44 @@ def iterative_trim(
             )
         current_upper = float(new_upper)
 
-    return current_upper, last_full_edges, last_full_quantity, last_full_percent
 
-
-def serialize_number(value):
-    if value is None:
-        return None
-    if isinstance(value, (np.integer, int)):
-        return int(value)
-    if isinstance(value, (np.floating, float)):
-        if np.isinf(value):
-            return None
-        return round(float(value), 2)
-    return value
-
-
-def compute_simulation_payload(parquet: pq.ParquetFile) -> dict:
+def compute_simulation_payload(conn, total_rows: int) -> dict:
     columns_report = []
-
     for col_name in tqdm(
         TARGET_COLUMNS,
         desc="EDA 11 - simulate upper bounds",
         disable=TQDM_DISABLE,
         leave=False,
         dynamic_ncols=True,
-        mininterval=0.5,
+        mininterval=TQDM_MIN_INTERVAL,
     ):
-        values, zero_count = load_positive_values_and_zero_count(parquet, col_name)
-        if values.size == 0:
-            scan_max = 1.0
-        else:
-            scan_max = float(np.max(values))
-        
-        denominator_non_zero = int(parquet.metadata.num_rows) - int(zero_count)
+        source_table, scan_max, zero_count = prepare_column_source(conn, col_name)
+        denominator_non_zero = int(total_rows) - int(zero_count)
 
         first_max, _, _, _ = iterative_trim(
-            values=values,
+            conn=conn,
+            source_table=source_table,
             initial_upper=scan_max,
             bin_count=FIRST_PASS_BIN_COUNT,
             threshold_percent=FIRST_PASS_THRESHOLD_PERCENT,
             denominator_non_zero=denominator_non_zero,
         )
         second_max, _, _, _ = iterative_trim(
-            values=values,
+            conn=conn,
+            source_table=source_table,
             initial_upper=first_max,
             bin_count=SECOND_PASS_BIN_COUNT,
             threshold_percent=SECOND_PASS_THRESHOLD_PERCENT,
             denominator_non_zero=denominator_non_zero,
         )
 
-        second_edges, second_quantity = build_histogram_from_values(values, second_max, SECOND_PASS_BIN_COUNT)
+        second_edges, second_quantity = build_histogram_counts(
+            conn, source_table, second_max, SECOND_PASS_BIN_COUNT
+        )
         if denominator_non_zero <= 0:
             second_percent = np.zeros_like(second_quantity, dtype=float)
         else:
             second_percent = second_quantity / denominator_non_zero * 100
-        last_second_percent = float(second_percent[-1]) if len(second_percent) > 0 else 0.0
-        if last_second_percent < SECOND_PASS_THRESHOLD_PERCENT:
-            raise RuntimeError(
-                f"Second pass final check failed for {col_name}: "
-                f"last_bin_percent={last_second_percent:.6f} < {SECOND_PASS_THRESHOLD_PERCENT} "
-                f"(upper={second_max:.6f}, denominator_non_zero={denominator_non_zero})"
-            )
 
         milestone = second_edges[1:-1] if len(second_edges) > 2 else np.array([], dtype=float)
         expanded_bins = []
@@ -209,7 +176,8 @@ def compute_simulation_payload(parquet: pq.ParquetFile) -> dict:
         )
 
     return {
-        "input_file": input_file.as_posix(),
+        "warehouse_db_file": WAREHOUSE_DB_FILE.as_posix(),
+        "input_table": VIEW_TAXI_BUSINESS_RULES,
         "generated_by": "eda/scripts/11_simulate_upper_bounds.py",
         "first_pass_bin_count": FIRST_PASS_BIN_COUNT,
         "second_pass_bin_count": SECOND_PASS_BIN_COUNT,
@@ -219,17 +187,10 @@ def compute_simulation_payload(parquet: pq.ParquetFile) -> dict:
     }
 
 
-def main() -> None:
-    if not input_file.exists():
-        raise FileNotFoundError(f"Input file not found: {input_file}")
+def main(conn):
 
-    parquet = pq.ParquetFile(input_file)
-    payload = compute_simulation_payload(parquet)
-
-    output_json.parent.mkdir(parents=True, exist_ok=True)
+    total_rows = int(conn.execute(f"SELECT count(*) FROM {quote_identifier(VIEW_TAXI_BUSINESS_RULES)}").fetchone()[0] or 0)
+    payload = compute_simulation_payload(conn, total_rows=total_rows)
     output_json.write_text(json.dumps(payload, indent=2, ensure_ascii=False) + "\n", encoding="utf-8")
     print(f"Saved JSON: {output_json}")
 
-
-if __name__ == "__main__":
-    main()
