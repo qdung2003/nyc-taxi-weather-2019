@@ -1,6 +1,6 @@
-import os, duckdb, psutil
+﻿import os, duckdb, psutil
 from contextlib import contextmanager
-from pipeline.services.paths import DUCKDB_TEMP_DIR, WAREHOUSE_DB_FILE
+from pipeline.constants.paths import DUCKDB_TEMP_DIR, WAREHOUSE_DB_FILE
 
 
 class DuckDBConnectionManager:
@@ -12,7 +12,6 @@ class DuckDBConnectionManager:
     def get_connection(self, ensure_dirs: bool = True, load_parquet: bool = True):
         current_config = (ensure_dirs, load_parquet)
 
-        # Reuse connection nếu config giống
         if self._connection is not None and self._config == current_config:
             try:
                 self._connection.execute("SELECT 1")
@@ -23,7 +22,6 @@ class DuckDBConnectionManager:
                 self._connection = None
                 self._config = None
 
-        # Tạo connection mới
         conn = connect_warehouse(
             ensure_dirs=ensure_dirs,
             load_parquet=load_parquet
@@ -91,5 +89,11 @@ def connect_warehouse(
         conn.execute("LOAD 'parquet';")
 
     return conn
+
+
+
+
+
+
 
 

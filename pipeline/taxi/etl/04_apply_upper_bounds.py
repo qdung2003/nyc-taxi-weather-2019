@@ -1,74 +1,91 @@
 import json
-from tqdm import tqdm
-from pipeline.services.queries import ensure_source_exists
-from pipeline.services.tqdm_settings import TQDM_DISABLE, TQDM_MIN_INTERVAL
-from pipeline.services.views import VIEW_TAXI_BUSINESS_RULES, VIEW_TAXI_UPPER_BOUNDS
+from pipeline.services.queries import (
+    run_with_conn,
+    compute_upper_bounds,
+    ensure_table_exists,
+    quote_identifier,
+)
+from pipeline.constants.columns import MONEY_COLUMNS
+from pipeline.constants.modules import ETL03_BUSINESS
+from pipeline.constants.paths import TAXI_EDA_RESULTS_DIR
+from pipeline.constants.tmp_tables import TMP_TAXI03, TMP_TAXI04
 
-TARGET_COLUMNS = ["trip_distance", "fare_amount", "tip_amount", "tolls_amount", "total_amount"]
+
+upper_bounds_file = TAXI_EDA_RESULTS_DIR / "07_before_upper_bounds.json"
 
 
-def compute_upper_bounds(conn) -> dict[str, float]:
-    print("Computing IQR upper bounds on the fly...")
-    selects = ", ".join(
-        f"quantile_cont({c}, [0.25, 0.75]), MAX({c})" for c in TARGET_COLUMNS
+def load_upper_bounds_from_eda07():
+    if not upper_bounds_file.exists():
+        return None
+
+    try:
+        report = json.loads(upper_bounds_file.read_text(encoding="utf-8"))
+    except (OSError, json.JSONDecodeError):
+        return None
+
+    upper_bounds = {
+        str(column.get("column_name")): column.get("second_pass_value")
+        for column in report.get("columns", [])
+        if column.get("column_name") is not None
+    }
+
+    if any(column_name not in upper_bounds for column_name in MONEY_COLUMNS):
+        return None
+
+    try:
+        return {
+            column_name: float(upper_bounds[column_name])
+            for column_name in MONEY_COLUMNS
+        }
+    except (TypeError, ValueError):
+        return None
+
+
+def create_etl04_upper_bounds(conn):
+    ensure_table_exists(conn, TMP_TAXI03, ETL03_BUSINESS.create_etl03_business_rules)
+    upper_bounds = load_upper_bounds_from_eda07()
+    if upper_bounds is None:
+        profiles = compute_upper_bounds(conn, quote_identifier(TMP_TAXI03))
+        upper_bounds = {
+            str(profile["column_name"]): float(profile["second_pass_value"])
+            for profile in profiles
+        }
+
+    where_clause = " AND ".join(
+        f"{quote_identifier(col)} <= {upper_bounds[col]:.12f}" for col in MONEY_COLUMNS
     )
-    query = f'SELECT {selects} FROM "{VIEW_TAXI_BUSINESS_RULES}"'
-    row = conn.execute(query).fetchone()
-    
-    bounds: dict[str, float] = {}
-    for i, col in enumerate(TARGET_COLUMNS):
-        q1, q3 = row[i*2]
-        max_val = row[i*2 + 1]
-        iqr = q3 - q1
-        upper_limit = q3 + 1.5 * iqr
-        bounds[col] = float(min(upper_limit, max_val))
-    return bounds
+    conn.execute(f'DROP TABLE IF EXISTS "{TMP_TAXI04}"')
+    conn.execute(
+        f"""
+        CREATE TEMP TABLE "{TMP_TAXI04}" AS
+        SELECT *
+        FROM "{TMP_TAXI03}"
+        WHERE {where_clause}
+        """
+    )
+    return upper_bounds
 
 
 def main(conn):
-    with tqdm(
-        total=4,
-        desc="ETL 04 - upper bounds",
-        unit="step",
-        disable=TQDM_DISABLE,
-        leave=True,
-        mininterval=TQDM_MIN_INTERVAL,
-    ) as pbar:
-        upper_bounds = compute_upper_bounds(conn)
-        pbar.update(1)
+    print("Preparing histogram-threshold upper bounds...")
+    upper_bounds = create_etl04_upper_bounds(conn)
 
-        ensure_source_exists(conn, VIEW_TAXI_BUSINESS_RULES)
-        pbar.update(1)
-
-        where_clause = " AND ".join(
-            f'{col} <= {upper_bounds[col]:.12f}' for col in TARGET_COLUMNS
-        )
-
-        print(f"Creating view '{VIEW_TAXI_UPPER_BOUNDS}'...")
-        conn.execute(f'DROP VIEW IF EXISTS "{VIEW_TAXI_UPPER_BOUNDS}"')
-        conn.execute(
-            f"""
-            CREATE VIEW "{VIEW_TAXI_UPPER_BOUNDS}" AS
-            SELECT *
-            FROM "{VIEW_TAXI_BUSINESS_RULES}"
-            WHERE {where_clause}
-            """
-        )
-        pbar.update(1)
-        input_rows = conn.execute(f'SELECT count(*) FROM "{VIEW_TAXI_BUSINESS_RULES}"').fetchone()[0]
-        output_rows = conn.execute(f'SELECT count(*) FROM "{VIEW_TAXI_UPPER_BOUNDS}"').fetchone()[0]
-        pbar.update(1)
+    input_rows = int(conn.execute(f'SELECT COUNT(*) FROM "{TMP_TAXI03}"').fetchone()[0] or 0)
+    output_rows = int(conn.execute(f'SELECT COUNT(*) FROM "{TMP_TAXI04}"').fetchone()[0] or 0)
+        
     removed = input_rows - output_rows
     removed_pct = (removed / input_rows * 100) if input_rows else 0.0
 
     print("-" * 30)
-    print(f"Step {VIEW_TAXI_UPPER_BOUNDS} complete.")
+    print("Step taxi_etl_04_upper_bounds_cte complete.")
     print(f"Input rows:   {input_rows:,}")
     print(f"Output rows:  {output_rows:,}")
     print(f"Rows removed: {removed:,} ({removed_pct:.2f}%)")
     print("Upper bounds used:")
-    for col in TARGET_COLUMNS:
+    for col in MONEY_COLUMNS:
         print(f"  - {col}: <= {upper_bounds[col]:.2f}")
     print("-" * 30)
 
 
+if __name__ == "__main__":
+    run_with_conn(main)

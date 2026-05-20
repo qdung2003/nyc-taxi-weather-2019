@@ -1,74 +1,56 @@
 # Data Cleaning Strategy - NYC Yellow Taxi 2019
 
-## 1. Nguồn tài liệu (Wayback)
+This document describes the current Taxi ETL cleaning rules implemented in
+`pipeline/taxi/etl/`.
 
-Dữ liệu năm 2019 được tham chiếu qua các tài liệu chính thống của TLC:
+## Data Sources
 
-1. [Data Dictionary - Yellow Trip Records (2019)](https://web.archive.org/web/20190808095554/https://www.nyc.gov/assets/tlc/downloads/pdf/data_dictionary_trip_records_yellow.pdf)
-2. [Taxi Fare Rates (2019)](https://web.archive.org/web/20190801021305/https://www.nyc.gov/site/tlc/passengers/taxi-fare.page)
-3. [TLC Passenger FAQ](https://web.archive.org/web/20260122112926/https://www.nyc.gov/site/tlc/passengers/passenger-frequently-asked-questions.page)
-4. [Trip Record User Guide](https://web.archive.org/web/20190810080518/https://www.nyc.gov/assets/tlc/downloads/pdf/trip_record_user_guide.pdf)
+- NYC TLC Yellow Taxi Trip Record parquet files for `YEAR` from `pipeline/constants/times.py`.
+- NYC TLC Yellow Taxi data dictionary and fare documentation are used as the rule reference.
 
----
+## Cleaning Summary
 
-## 2. Bảng kế hoạch dọn dẹp tóm tắt
+| # | Column(s) | Rule |
+| :--- | :--- | :--- |
+| 1 | `tpep_pickup_datetime`, `tpep_dropoff_datetime` | Keep trips fully inside `YEAR`; require pickup before dropoff. |
+| 2 | `VendorID` | Keep `1` and `2`. |
+| 3 | `passenger_count` | Keep `1..5`. |
+| 4 | `RatecodeID` | Keep `1..6`. |
+| 5 | `store_and_fwd_flag` | Keep `Y` and `N`. |
+| 6 | `PULocationID`, `DOLocationID` | Keep taxi zone IDs `1..263`. |
+| 7 | `payment_type` | Keep `1..4`. |
+| 8 | `congestion_surcharge` | Treat null as `0`; keep `0`, `0.75`, `2.5`. |
+| 9 | `trip_distance` | Keep values greater than `0`; later capped by upper bounds. |
+| 10 | `fare_amount`, `extra` | Validate fare after the 2.5 USD congestion-shift check; keep normalized `extra` in `{0, 0.5, 1.0}`. |
+| 11 | `mta_tax` | Keep `0.5`. |
+| 12 | `tip_amount`, `tolls_amount` | Keep non-negative values. |
+| 13 | `improvement_surcharge` | Keep `0.3`. |
+| 14 | `total_amount` | Keep non-negative values; later capped by upper bounds. |
+| 15 | `payment_type`, `tip_amount` | Remove non-card payments `2, 3, 4` when `tip_amount > 0`. |
 
-| # | Cột | Khoảng lọc | Dẫn chứng (text) | Link |
-| :--- | :--- | :--- | :--- | :--- |
-| 1 | `VendorID` | `[1, 2]` | Theo mã hãng TPEP/LPEP hợp lệ. | 1 |
-| 2 | `passenger_count` | `[1, 5]` | Taxi chở tối đa 5 hành khách (quy định TLC; không tính lap child). | 3 |
-| 3 | `RatecodeID` | `[1, 6]` | Theo mã RatecodeID hợp lệ từ 1-6. | 1 |
-| 4 | `store_and_fwd_flag` | `['Y', 'N']` | Cờ chỉ nhận giá trị `Y` hoặc `N`. | 1 |
-| 5 | `PULocationID`, `DOLocationID` | `[1, 263]` | “...pickup or drop-off... populated by numbers ranging from 1-263.” | 4 |
-| 6 | `payment_type` | `[1, 4]` | Giữ các nhóm chính; loại bỏ 5 (Unknown) và 6 (Void). | 1 + Decision |
-| 7 | `trip_distance` | `(0, Max*]` | Lọc > 0 và cắt ngưỡng Max từ Simulation. | Decision |
-| 8 | `fare_amount` | `(0, Max*]` | Áp dụng sau chuẩn hóa 2.5 USD; cắt ngưỡng Max. | Decision |
-| 9 | `extra` | `{0.0, 0.5, 1.0}` | Áp dụng sau bước chuẩn hóa (tách phí 2.5 USD). | 2 + Decision |
-| 10 | `mta_tax` | `{0.5}` | “Plus 50 cents MTA State Surcharge...” | 2 + Decision |
-| 11 | `improvement_surcharge` | `{0.3}` | “Plus $0.3 Improvement Surcharge.” | 2 + Decision |
-| 12 | `congestion_surcharge` | `{0, 0.75, 2.5}` | “Plus $2.50 (Yellow Taxi) ...”; chuẩn hóa `null -> 0`. | 2 + EDA |
-| 13 | `tip_amount` | `[0, Max*]` | Ràng buộc theo `payment_type`; cắt ngưỡng Max. | Decision |
-| 14 | `total_amount` | `(0, Max*]` | Lọc > 0 và cắt ngưỡng Max từ Simulation. | Decision |
+## ETL Flow
 
-*\*Max: Cận trên được tính toán động bởi script mô phỏng EDA 11.*
+1. `01_download_yellow_tripdata.py`
+   Downloads the 12 monthly Yellow Taxi parquet files for the configured year.
 
----
+2. `02_ingest_data.py`
+   Ingests raw parquet files into DuckDB table `taxi_raw`.
 
-## 3. Quy tắc chi tiết (Detailed Rules)
+3. `03_apply_business_rules.py`
+   Creates temp table `tmp_taxi03` by selecting the final Taxi columns and applying the strict business filters above.
 
-### Rule 1: Chuẩn hóa phí hạ tầng (The 2.5 USD Shift)
-Trong dữ liệu 2019, nhiều trường hợp ghi nhận phí **$2.50 Congestion Surcharge** nhầm vào cột `extra`. 
-- **Dấu hiệu**: `extra >= 2.5`.
-- **Xử lý**: Lấy 2.5 USD từ `extra` cộng bù vào `fare_amount`. Việc này đảm bảo biểu đồ phân bổ của `extra` chỉ còn các giá trị phụ phí giờ cao điểm/ban đêm hợp lệ {0.5, 1.0}.
+4. `04_apply_upper_bounds.py`
+   Creates temp table `tmp_taxi04` by applying dynamic upper bounds to:
+   `trip_distance`, `fare_amount`, `tip_amount`, `tolls_amount`, and `total_amount`.
 
-### Rule 2: Logic Tiền tip (Tip vs Payment Type)
-TLC chỉ ghi nhận tiền Tip tự động thông qua thẻ tín dụng.
-- **Quy tắc**: Nếu `payment_type` không thuộc `{1}` (Thẻ tín dụng), hệ thống sẽ buộc `tip_amount = 0` để tránh các sai số ghi nhận thủ công cho các lượt Cash/Dispute/Free.
+   It first tries to read `pipeline/taxi/eda/results/07_before_upper_bounds.json`.
+   If that file is missing or invalid, it computes the upper bounds directly from `tmp_taxi03`.
 
-### Rule 3: Lọc ngoại lai động (Dynamic Outlier Cutting)
-Sử dụng script **EDA 11** để quét dữ liệu và tìm điểm rơi phân bổ tự nhiên. Script `04_apply_upper_bounds.py` sẽ tự động kích hoạt `11_simulate_upper_bounds.py` nếu thiếu file kết quả mô phỏng.
+5. `05_optimize_dtypes.py`
+   Creates final DuckDB table `taxi_clean` with compact types such as `UTINYINT`, `USMALLINT`, `FLOAT`, `TIMESTAMP`, and boolean `store_and_fwd_flag`.
 
----
+## Notes
 
-## 4. Luồng thực thi Scripts
-
-Quy trình ETL bao gồm 6 giai đoạn chính:
-
-1. **`01_download_yellow_tripdata.py`**: Tải 12 file dữ liệu thô hàng tháng từ Cloudfront TLC.
-2. **`02_ingest_data.py`**: Nạp toàn bộ 12 file vào bảng DuckDB `taxi_raw`.
-3. **`03_apply_business_rules.py`**:
-    - Lọc bản ghi đúng năm 2019 và điều kiện `pickup < dropoff`.
-    - Loại bỏ cột `airport_fee`.
-    - Áp dụng toàn bộ business rules nền tảng vào view trung gian.
-4. **`04_apply_upper_bounds.py`**: Cắt bỏ các kỷ lục giao dịch ảo hoặc phi lý (Outlier Cut).
-5. **`05_optimize_dtypes.py`**:
-    - Ép lại kiểu dữ liệu để đạt hiệu quả nén cao nhất (~20%).
-    - Kết quả được lưu song song tại:
-        - bảng DuckDB `taxi_clean`
-        - `clean/cleaned_tripdata_2019.parquet`
-
----
-
-## 5. Chiến lược tối ưu hóa kiểu dữ liệu (Dtypes)
-
-Dữ liệu sạch được nén bằng cách chuyển các kiểu dữ liệu từ `double/int64` sang các kiểu nhỏ hơn như `float32/int32/int8`. Hiệu quả giúp giảm dung lượng từ 1.3GB xuống còn ~1.03GB, tăng tốc độ đọc/ghi dữ liệu ở các giai đoạn phân tích sau.
+- ETL 03 filters rows; it does not rewrite `fare_amount`, `extra`, or `congestion_surcharge`.
+- ETL 04 is the outlier-removal step for distance and money columns.
+- The final cleaned Taxi dataset is stored in DuckDB, not as a committed output file.

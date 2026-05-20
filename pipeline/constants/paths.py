@@ -1,8 +1,8 @@
-from pathlib import Path
+﻿from pathlib import Path
 
 
-here = Path(__file__).resolve()
-for candidate in here.parents:
+CURRENT_FILE = Path(__file__).resolve()
+for candidate in CURRENT_FILE.parents:
     if (candidate / "pyproject.toml").exists() or (candidate / ".git").exists():
         PROJECT_ROOT = candidate
         break
@@ -24,9 +24,12 @@ DUCKDB_TEMP_DIR = DATA_DIR / "duckdb_temp"
 
 # Temp paths
 TAXI_RAW_TEMP_DIR = DATA_DIR / "taxi_raw_temp"
+WEATHER_RAW_CSV = DATA_DIR / "NYC_Central_Park_weather_1869-2022.csv"
+
+# EDA results
+TAXI_EDA_RESULTS_DIR = TAXI_DIR / "eda" / "results"
+WEATHER_EDA_RESULTS_DIR = WEATHER_DIR / "eda" / "results"
 
 # Online urls
 TAXI_RAW_URL = "https://d37ci6vzurychx.cloudfront.net/trip-data"
 WEATHER_RAW_URL = "https://drive.google.com/file/d/1c3XJIYoh4xh_wAecUMiAW0ac1wXF6yU2/view?usp=drive_link"
-
-

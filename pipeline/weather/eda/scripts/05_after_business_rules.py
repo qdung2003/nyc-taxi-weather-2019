@@ -1,0 +1,105 @@
+from pipeline.constants.modules import WEATHER03_BUSINESS
+from pipeline.constants.paths import WEATHER_EDA_RESULTS_DIR
+from pipeline.constants.tmp_tables import TMP_WEATHER03
+from pipeline.services.helpers import write_json_compact
+from pipeline.services.queries import (
+    build_high_unique_columns,
+    build_low_unique_columns,
+    calculate_valid_type_percentages,
+    ensure_table_exists,
+    get_column_data_types,
+    get_column_groups,
+    quote_identifier,
+    run_with_conn,
+)
+
+
+WEATHER_EDA_RESULTS_DIR.mkdir(parents=True, exist_ok=True)
+output_file = WEATHER_EDA_RESULTS_DIR / "05_after_business_rules.json"
+
+
+def main(conn):
+    ensure_table_exists(conn, TMP_WEATHER03, WEATHER03_BUSINESS.create_weather03_business_rules)
+    tmp_weather03_quoted = quote_identifier(TMP_WEATHER03)
+
+    row_count = conn.execute(
+        f"SELECT count(*) FROM {tmp_weather03_quoted}"
+    ).fetchone()[0]
+
+    column_type_rows = conn.execute(f"DESCRIBE {tmp_weather03_quoted}").fetchall()
+    column_names = [str(row[0]) for row in column_type_rows]
+    low_unique_column_names, high_unique_column_names = get_column_groups(
+        conn,
+        tmp_weather03_quoted,
+        column_names,
+        desc="Weather EDA 05 - detecting column groups",
+    )
+
+    low_unique_data_types = get_column_data_types(
+        column_type_rows,
+        low_unique_column_names,
+    )
+    low_unique_valid_type_percentages = calculate_valid_type_percentages(
+        conn,
+        tmp_weather03_quoted,
+        low_unique_column_names,
+        low_unique_data_types,
+        row_count,
+    )
+    low_unique_columns = build_low_unique_columns(
+        conn,
+        tmp_weather03_quoted,
+        low_unique_column_names,
+        low_unique_data_types,
+        low_unique_valid_type_percentages,
+        row_count,
+        desc="Weather EDA 05 - value counts",
+        leave=False,
+    )
+
+    high_unique_data_types = get_column_data_types(
+        column_type_rows,
+        high_unique_column_names,
+    )
+    high_unique_valid_type_percentages = calculate_valid_type_percentages(
+        conn,
+        tmp_weather03_quoted,
+        high_unique_column_names,
+        high_unique_data_types,
+        row_count,
+    )
+    high_unique_columns = build_high_unique_columns(
+        conn,
+        TMP_WEATHER03,
+        high_unique_column_names,
+        high_unique_data_types,
+        high_unique_valid_type_percentages,
+        row_count,
+        desc="Weather EDA 05 - profiling high-duplicate columns",
+        temp_prefix="tmp_weather_eda05",
+    )
+
+    payload = {
+        "row_count": row_count,
+        "low_unique_column_count": len(low_unique_columns),
+        "high_unique_column_count": len(high_unique_columns),
+        "low_unique_columns": low_unique_columns,
+        "high_unique_columns": high_unique_columns,
+    }
+    write_json_compact(
+        output_file,
+        payload,
+        compact_all_scalar_arrays=True,
+        align_compact_array_items=True,
+        align_compact_array_key_labels=True,
+        parallel_array_groups=[
+            ("values", "counts", "percentages"),
+            ("month_counts", "month_percentages"),
+            ("bin_edges", "bin_counts", "bin_percentages"),
+        ],
+    )
+    print(f"EDA 05 saved: {output_file.name}")
+
+
+if __name__ == "__main__":
+    run_with_conn(main)

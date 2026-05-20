@@ -1,18 +1,37 @@
-import urllib.request
 import re
-from pipeline.services.paths import WEATHER_RAW_URL, DATA_DIR
+import urllib.request
+from pipeline.constants.paths import WEATHER_RAW_CSV, WEATHER_RAW_URL
 
-def main() -> None:
-    DATA_DIR.mkdir(parents=True, exist_ok=True)
-    output_file = DATA_DIR / "NYC_Central_Park_weather_1869-2022.csv"
-    download_url = WEATHER_RAW_URL
-    match = re.search(r'/d/([a-zA-Z0-9_-]+)', WEATHER_RAW_URL)
-    if match:
-        file_id = match.group(1)
-        download_url = f"https://drive.google.com/uc?export=download&id={file_id}"
-    
-    print(f"Downloading from {download_url} \nTo {output_file}...")
-    urllib.request.urlretrieve(download_url, str(output_file))
+
+def build_weather_download_url() -> str:
+    match = re.search(r"/d/([a-zA-Z0-9_-]+)", WEATHER_RAW_URL)
+    if not match:
+        return WEATHER_RAW_URL
+    file_id = match.group(1)
+    return f"https://drive.google.com/uc?export=download&id={file_id}"
+
+
+def download_weather_file(*, reset_file: bool = False) -> None:
+    if reset_file and WEATHER_RAW_CSV.exists():
+        WEATHER_RAW_CSV.unlink()
+
+    WEATHER_RAW_CSV.parent.mkdir(parents=True, exist_ok=True)
+    download_url = build_weather_download_url()
+    print(f"Downloading from {download_url}\nTo {WEATHER_RAW_CSV}...")
+    urllib.request.urlretrieve(download_url, str(WEATHER_RAW_CSV))
     print("Download completed successfully!")
 
 
+def ensure_weather_raw_file():
+    if not WEATHER_RAW_CSV.exists():
+        print("INFO: Missing weather CSV file. Downloading...")
+        download_weather_file()
+    return WEATHER_RAW_CSV
+
+
+def main() -> None:
+    download_weather_file(reset_file=True)
+
+
+if __name__ == "__main__":
+    main()

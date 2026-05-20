@@ -1,0 +1,396 @@
+﻿(function (D) {
+  const {
+    q,
+    esc,
+    fmtInt,
+    fmtPct,
+    kvRowHtml,
+    balanceFlexRows,
+    isSchemaTypeMatch,
+    renderInnerTabs,
+    renderScalarChips,
+    isPlainObject,
+    profileValueHeader,
+    buildProfileRowsForMode,
+    buildRangeChartRows,
+    prependRangeSummaryRows,
+    drawBars,
+    drawStackedBars,
+    byPercentDesc,
+    renderRows,
+  } = D;
+function render01(root, data) {
+  const kpis = root.querySelector('.kpis');
+  const filesToggle = q(root, 'k01FilesToggle');
+  const filesList = q(root, 'k01FilesList');
+  const filesBody = q(root, 'k01FilesBody');
+  const schemaBody = q(root, 'k01SchemaBody');
+  const mismatchBody = q(root, 'k01MismatchBody');
+  if (kpis) {
+    kpis.classList.add('kpis-inline');
+    const rows = Object.entries(data).filter(([, value]) => (
+      value === null || ['string', 'number', 'boolean'].includes(typeof value)
+    ));
+    kpis.innerHTML = rows.map(([k, v]) => kvRowHtml(k, v)).join('');
+    balanceFlexRows(kpis, '.k01-meta-row', 'kpi-break');
+  }
+
+  if (filesList && filesBody) {
+    const files = data.files || [];
+    const fileTable = filesBody.closest('table');
+    const filesWrap = filesList.closest('.eda01-files');
+    if (!files.length && filesWrap) filesWrap.classList.add('hidden');
+    const fileHead = fileTable?.querySelector('thead');
+    const renderFileList = () => {
+      const availableWidth = filesList.parentElement?.clientWidth || filesList.clientWidth || 720;
+      const cols = Math.max(1, Math.min(4, files.length || 1, Math.floor(availableWidth / 190) || 1));
+      const rowsPerCol = Math.ceil(files.length / cols);
+      const columns = Array.from({ length: cols }, (_, c) => {
+        const start = c * rowsPerCol;
+        return Array.from({ length: rowsPerCol }, (_, r) => {
+          const idx = start + r;
+          if (idx >= files.length) return null;
+          return { index: idx + 1, name: files[idx] };
+        });
+      });
+      if (fileTable) {
+        fileTable.style.setProperty('--file-cols', String(cols));
+        fileTable.style.setProperty('--file-index-total', `${cols * 52}px`);
+      }
+      if (fileHead) {
+        fileHead.innerHTML = `<tr>${Array.from({ length: cols }, () => '<th>#</th><th>File name</th>').join('')}</tr>`;
+      }
+      filesBody.innerHTML = Array.from({ length: rowsPerCol }, (_, r) => {
+        const cells = columns.map((col) => col[r]);
+        const tds = cells.map((cell) => (
+          cell
+            ? `<td>${cell.index}</td><td><code>${esc(cell.name)}</code></td>`
+            : '<td></td><td></td>'
+        )).join('');
+        return `<tr>${tds}</tr>`;
+      }).join('');
+    };
+    renderFileList();
+    filesList.classList.add('hidden');
+    if (filesToggle) filesToggle.textContent = `Show file list (${files.length})`;
+    const onResize = () => {
+      if (!filesList.classList.contains('hidden')) renderFileList();
+    };
+    filesList._renderFileList = renderFileList;
+    filesList._onResize = onResize;
+    D.cleanupStep = () => window.removeEventListener('resize', onResize);
+  }
+  if (filesToggle && filesList) {
+    filesToggle.onclick = () => {
+      const isHidden = filesList.classList.toggle('hidden');
+      if (!isHidden && typeof filesList._renderFileList === 'function') {
+        filesList._renderFileList();
+        if (typeof filesList._onResize === 'function') window.addEventListener('resize', filesList._onResize);
+      } else if (typeof filesList._onResize === 'function') {
+        window.removeEventListener('resize', filesList._onResize);
+      }
+      filesToggle.textContent = isHidden
+        ? `Show file list (${(data.files || []).length})`
+        : `Hide file list (${(data.files || []).length})`;
+    };
+  }
+
+  if (schemaBody) {
+    const ref = data.reference_schema || {};
+    const db = data.database_schema || {};
+    const keys = Object.keys(ref);
+    schemaBody.innerHTML = keys
+      .map((k) => {
+        const refType = String(ref[k] ?? '');
+        const dbType = String(db[k] ?? '');
+        const isMatch = isSchemaTypeMatch(refType, dbType);
+        return `<tr><td><code>${esc(k)}</code></td><td>${esc(refType)}</td><td>${esc(dbType)}</td><td><span class="status-badge ${isMatch ? 'match' : 'mismatch'}">${isMatch ? 'Match' : 'Mismatch'}</span></td></tr>`;
+      })
+      .join('');
+  }
+
+  if (mismatchBody) {
+    const mismatches = data.files_mismatches || [];
+    const mismatchSection = mismatchBody.closest('.card.section');
+    if (!mismatches.length) {
+      mismatchBody.innerHTML = '';
+      if (mismatchSection) mismatchSection.classList.add('hidden');
+    } else {
+      if (mismatchSection) mismatchSection.classList.remove('hidden');
+      mismatchBody.innerHTML = mismatches
+        .map((m) => `<tr><td>${esc(m.file_name || '')}</td><td><span class="status-badge mismatch">Mismatch</span> <code>${esc(JSON.stringify(m.file_mismatches || {}))}</code></td></tr>`)
+        .join('');
+    }
+  }
+}
+
+// ===== JS riêng EDA 02/03/06/08 (profile style) =====
+function renderProfileTab(root, data, mode) {
+  const highCols = data.high_unique_columns || data.high_duplicate_columns || [];
+  const lowCols = data.low_unique_columns || data.low_duplicate_columns || [];
+  const cols = mode === '02'
+    ? lowCols
+    : mode === '03'
+      ? highCols
+      : [...lowCols, ...highCols];
+
+  if (!cols.length) return;
+
+  const summaryRows = data.summary?.total_rows || data.summary?.row_count || data.row_count || data.total_rows || 0;
+  const tabs = root.querySelector('.js-tabs') || q(root, 'tabs');
+  const chips = q(root, 'chips');
+  const filterCard = root.querySelector('.profile-filter-card');
+  const filterBox = root.querySelector('.profile-filter');
+  const chartTitle = q(root, 'chartTitle');
+  const valueHeader = q(root, 'valueHeader');
+  const chart = q(root, 'chart');
+  const bodyRows = q(root, 'bodyRows');
+
+  let idx = 0;
+
+  const rangeCols = new Set(data.range_columns || ['fare_amount', 'tip_amount', 'tolls_amount', 'total_amount', 'trip_distance']);
+
+  function draw() {
+    const c = cols[idx] || {};
+    if (chartTitle) chartTitle.textContent = `Distribution - ${c.column_name || ''}`;
+    if (valueHeader) valueHeader.textContent = profileValueHeader(c, rangeCols);
+
+    if (tabs) {
+      renderInnerTabs(tabs, cols, idx, (i) => {
+        idx = i;
+        draw();
+      });
+    }
+
+    renderScalarChips(chips, c);
+    if (filterBox) {
+      const filterEntries = c && isPlainObject(c.filter) ? Object.entries(c.filter) : [];
+      if (mode === '03' && filterEntries.length) {
+        if (filterCard) filterCard.classList.remove('hidden');
+        filterBox.classList.add('kpis-inline', 'kpis-eda01-style');
+        filterBox.innerHTML = filterEntries.map(([k, v]) => kvRowHtml(k, v)).join('');
+        balanceFlexRows(filterBox, '.k01-meta-row', 'kpi-break');
+      } else {
+        if (filterCard) filterCard.classList.add('hidden');
+        filterBox.innerHTML = '';
+      }
+    }
+
+    const rows = buildProfileRowsForMode(c, summaryRows, mode);
+    const chartRows = buildRangeChartRows(rows, c, summaryRows);
+    drawBars(chart, chartRows, {
+      isRangeColumn: Boolean(c.bin_edges && c.bin_counts && c.bin_percentages) || rangeCols.has(c.column_name),
+      splitAtZero: D.getCurrentDomain() === 'weather' && ['TMIN', 'TMAX'].includes(String(c.column_name)),
+      lineThreshold: 40,
+      maxBarWidth: 28,
+      barRatio: 0.7,
+      alwaysShowPct: true,
+    });
+
+    if (bodyRows) {
+      const tableRows = prependRangeSummaryRows(rows, c, summaryRows);
+      renderRows(bodyRows, tableRows, (r) => `<tr><td><code>${esc(r.label)}</code></td><td>${fmtInt(r.y)}</td><td>${fmtPct(r.percent)}</td></tr>`);
+    }
+  }
+
+  draw();
+}
+
+// ===== JS riêng EDA 04 =====
+function render04(root, raw) {
+  const list = Array.isArray(raw) ? raw : [];
+  const check1 = list.find((x) => x.check === 1) || {};
+  const check2 = list.find((x) => x.check === 2) || {};
+  const check3 = list.find((x) => x.check === 3) || {};
+  const c1 = check1.columns || [];
+  const c2 = check2.columns || [];
+  const c3 = check3.columns || [];
+
+  const kTotal = q(root, 'kTotal');
+  const kPt3 = q(root, 'kPt3');
+  const kPt4 = q(root, 'kPt4');
+  const check1Desc = q(root, 'check1Desc');
+  const check2Desc = q(root, 'check2Desc');
+  const check3Desc = q(root, 'check3Desc');
+  const check2RowCount = q(root, 'check2RowCount');
+  const check3RowCount = q(root, 'check3RowCount');
+  if (check1Desc) check1Desc.textContent = check1.description || '';
+  if (check2Desc) check2Desc.textContent = check2.description || '';
+  if (check3Desc) check3Desc.textContent = check3.description || '';
+  if (kTotal) {
+    const c1Total = c1.reduce((acc, r) => acc + Number(r.total_count || 0), 0);
+    const currentStepsData = D.dashboardData[D.getCurrentDomain()] || {};
+    const fallbackTotal = currentStepsData['02']?.data?.row_count || currentStepsData['02']?.data?.total_rows || 0;
+    kTotal.textContent = fmtInt(c1Total || fallbackTotal);
+  }
+
+  const rows1 = c1.map((r) => ({ label: `payment_type = ${r.payment_type}`, rows: r.tip_0_count || 0, totalCount: r.total_count || 0, percent: r.percent || 0 }));
+  const rows2 = c2.map((r) => ({ label: r.column_name, rows: r.count || 0, rowCount: check2.row_count || 0, percent: r.percent || 0 }));
+  const rows3 = c3.map((r) => ({ label: r.column_name, rows: r.count || 0, rowCount: check3.row_count || 0, percent: r.percent || 0 }));
+  if (check2RowCount) check2RowCount.textContent = `payment_type = ${check2.payment_type ?? 3}: ${fmtInt(check2.row_count || 0)} rows`;
+  if (check3RowCount) check3RowCount.textContent = `payment_type = ${check3.payment_type ?? 4}: ${fmtInt(check3.row_count || 0)} rows`;
+
+  if (kPt3) kPt3.textContent = fmtInt(rows2.length ? Math.round((rows2[0].rows * 100) / Math.max(rows2[0].percent, 0.00001)) : 0);
+  if (kPt4) kPt4.textContent = fmtInt(rows3.length ? Math.round((rows3[0].rows * 100) / Math.max(rows3[0].percent, 0.00001)) : 0);
+
+  const eda04ChartOptions = { w: 1080, h: 320, maxBarWidth: 53, noTruncateLabels: true, margin: { top: 22, right: 24, bottom: 44, left: 72 } };
+  const chartRows1 = rows1.map((r) => ({ label: r.label, y: r.percent, percent: r.percent }));
+  const sortedRows2 = [...rows2].sort(byPercentDesc);
+  const sortedRows3 = [...rows3].sort(byPercentDesc);
+  const chartRows2 = sortedRows2.map((r) => ({ label: r.label, y: r.rows, percent: r.percent }));
+  const chartRows3 = sortedRows3.map((r) => ({ label: r.label, y: r.rows, percent: r.percent }));
+  drawBars(q(root, 'chart1'), chartRows1, { ...eda04ChartOptions, color: '#d97706', yMax: 100, yScaleMax: 112, hideZeroTick: true });
+  drawBars(q(root, 'chart2'), chartRows2, { ...eda04ChartOptions, color: '#0f766e', yMax: 100, yScaleMax: 112, hideZeroTick: true });
+  drawBars(q(root, 'chart3'), chartRows3, { ...eda04ChartOptions, color: '#7c3aed', yMax: 100, yScaleMax: 112, hideZeroTick: true });
+
+  const tb1 = q(root, 'tb1');
+  const tb2 = q(root, 'tb2');
+  const tb3 = q(root, 'tb3');
+  renderRows(tb1, rows1, (r) => `<tr><td><code>${esc(r.label)}</code></td><td>${fmtInt(r.rows)}</td><td>${fmtInt(r.totalCount)}</td><td>${fmtPct(r.percent)}</td></tr>`);
+  renderRows(tb2, sortedRows2, (r) => `<tr><td><code>${esc(r.label)}</code></td><td>${fmtInt(r.rows)}</td><td>${fmtPct(r.percent)}</td></tr>`);
+  renderRows(tb3, sortedRows3, (r) => `<tr><td><code>${esc(r.label)}</code></td><td>${fmtInt(r.rows)}</td><td>${fmtPct(r.percent)}</td></tr>`);
+}
+
+// ===== JS riêng EDA 05 (từ python 08) =====
+function render05(root, data) {
+  const summary = data.summary || data || {};
+  const rules = data.rules || [];
+  const pageSize = 8;
+  let page = 0;
+
+  const kpis = root.querySelector('.kpis');
+  if (kpis) {
+    kpis.classList.add('kpis-inline', 'kpis-eda01-style');
+    const rows = [
+      ['raw_row_count', summary.raw_row_count ?? summary.total_input_rows],
+      ['clean_row_count', summary.clean_row_count ?? summary.total_clean_rows],
+      ['removed_row_count', summary.removed_row_count ?? summary.total_removed_rows],
+      ['removed_percentage', summary.removed_percentage ?? summary.total_removed_percent],
+    ];
+    kpis.innerHTML = rows.map(([k, v]) => kvRowHtml(k, v)).join('');
+    balanceFlexRows(kpis, '.k01-meta-row', 'kpi-break');
+  }
+
+  const prevBtn = q(root, 'prevBtn');
+  const nextBtn = q(root, 'nextBtn');
+  const pageInfo = q(root, 'pageInfo');
+  const rulesBody = q(root, 'rulesBody');
+  const svg = q(root, 'chart');
+  const ruleRemovedCount = (r) =>
+    Number(r.exclusive_removed_row_count ?? r.removed_exclusive_rows ?? 0)
+    + Number(r.shared_removed_row_count ?? r.removed_shared_rows ?? 0);
+  const sortedRules = [...rules].sort((a, b) => ruleRemovedCount(b) - ruleRemovedCount(a));
+
+  function drawPage() {
+    const totalPages = Math.max(1, Math.ceil(rules.length / pageSize));
+    page = Math.max(0, Math.min(page, totalPages - 1));
+    const items = sortedRules.slice(page * pageSize, page * pageSize + pageSize);
+
+    if (pageInfo) pageInfo.textContent = `Page ${page + 1} / ${totalPages} - Showing ${items.length} rule(s)`;
+    if (prevBtn) prevBtn.disabled = page === 0;
+    if (nextBtn) nextBtn.disabled = page >= totalPages - 1;
+
+    if (rulesBody) {
+      renderRows(
+        rulesBody,
+        items,
+        (r) =>
+          `<tr><td><code>${esc(r.rule_name)}</code></td><td><code>${esc(r.column_name)}</code></td><td>${fmtInt(r.invalid_row_count)}</td><td>${fmtInt(r.exclusive_removed_row_count)}</td><td>${fmtInt(r.shared_removed_row_count)}</td><td>${fmtPct(r.invalid_row_percentage)}</td><td>${fmtPct(r.exclusive_removed_percentage)}</td><td>${fmtPct(r.shared_removed_percentage)}</td></tr>`,
+      );
+    }
+
+    const chartRows = items.map((r) => ({
+      label: r.column_name || r.rule_name,
+      exclusive: Number(r.exclusive_removed_row_count ?? r.removed_exclusive_rows ?? 0),
+      shared: Number(r.shared_removed_row_count ?? r.removed_shared_rows ?? 0),
+      total: ruleRemovedCount(r),
+      exclusivePercent: Number(r.exclusive_removed_percentage ?? 0),
+      sharedPercent: Number(r.shared_removed_percentage ?? 0),
+      percent: (r.exclusive_removed_percentage ?? 0) + (r.shared_removed_percentage ?? 0),
+    }));
+    drawStackedBars(svg, chartRows, {
+      w: 1080,
+      h: 320,
+      maxBarWidth: 53,
+      margin: { top: 22, right: 24, bottom: 44, left: 72 },
+      noTruncateLabels: true,
+    });
+  }
+
+  if (prevBtn) prevBtn.onclick = () => { page -= 1; drawPage(); };
+  if (nextBtn) nextBtn.onclick = () => { page += 1; drawPage(); };
+  drawPage();
+}
+
+// ===== JS riêng EDA 07 =====
+function render07(root, data) {
+  const cols = data.columns || [];
+  if (!cols.length) return;
+  const tabs = root.querySelector('.js-tabs') || q(root, 'tabs');
+  const tbody = q(root, 'tbody');
+  const chart = q(root, 'chart');
+  const chips = q(root, 'chips');
+  let idx = 0;
+
+  function draw() {
+    const col = cols[idx];
+    const edges = col.bin_edges || [];
+    const counts = col.bin_counts || [];
+    const pcts = col.bin_percentages || [];
+    const hasFullEdges = edges.length === counts.length + 1;
+    const bins = counts.map((q, i) => {
+        const left = hasFullEdges ? edges[i] : (i === 0 ? 0 : (edges[i - 1] ?? null));
+        const right = hasFullEdges
+          ? edges[i + 1]
+          : edges[i] ?? col.second_pass_value ?? col.second_pass_max_value ?? col.final_upper_bound ?? null;
+        return {
+          index: i + 1,
+          left,
+          right,
+          label: `(${left}, ${right}]`,
+          quantity: q,
+          quantity_percent: pcts[i] ?? 0,
+        };
+      });
+    renderScalarChips(chips, col);
+
+    if (tabs) {
+      renderInnerTabs(tabs, cols, idx, (i) => {
+        idx = i;
+        draw();
+      });
+    }
+
+    renderRows(tbody, bins, (b) => `<tr><td><code>${esc(b.label)}</code></td><td>${fmtInt(b.quantity)}</td><td>${fmtPct(b.quantity_percent)}</td></tr>`);
+
+    drawBars(
+      chart,
+      bins.map((b) => ({ label: String(b.right), y: b.quantity, percent: b.quantity_percent, noLabelOffset: b.noLabelOffset })),
+      { w: 1000, h: 280, isRangeColumn: true, noTruncateLabels: true, showAllLabels: true, alwaysShowPct: true, showVerticalDividers: true, xLabelOffsetRatio: 0.5, margin: { top: 22, right: 20, bottom: 42, left: 86 } },
+    );
+  }
+
+  draw();
+}
+
+const STEP_RENDERERS = {
+  '01': render01,
+  '02': (root, data) => renderProfileTab(root, data, '02'),
+  '03': (root, data) => renderProfileTab(root, data, '03'),
+  '04': render04,
+  '05': render05,
+  '06': (root, data) => renderProfileTab(root, data, '06'),
+  '07': render07,
+  '08': (root, data) => renderProfileTab(root, data, '08'),
+};
+
+
+  Object.assign(D, {
+    render01,
+    renderProfileTab,
+    render04,
+    render05,
+    render07,
+    STEP_RENDERERS,
+  });
+})(window.Dashboard = window.Dashboard || {});

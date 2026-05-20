@@ -1,33 +1,28 @@
-import json
 import pyarrow.parquet as pq
-from pipeline.services.helpers import extract_month
-from pipeline.services.paths import TAXI_DIR, TAXI_RAW_TEMP_DIR
+from pipeline.services.helpers import extract_month, write_json_compact
+from pipeline.constants.paths import TAXI_EDA_RESULTS_DIR, TAXI_RAW_TEMP_DIR
+from pipeline.services.queries import run_with_conn
+from pipeline.constants.modules import DOWNLOAD_YELLOW_TRIPDATA
 
 
-output_dir = TAXI_DIR / "eda" / "results"
-output_dir.mkdir(parents=True, exist_ok=True)
-output_file = output_dir / "01_check_parquet_schema.json"
+TAXI_EDA_RESULTS_DIR.mkdir(parents=True, exist_ok=True)
+output_file = TAXI_EDA_RESULTS_DIR / "01_schemas.json"
 
 
 def main(conn):
-
     link_parquet_files = sorted(
-        TAXI_RAW_TEMP_DIR.glob("yellow_tripdata_2019-*.parquet"), # Get all parquet files matching the pattern yellow_tripdata_2019-*.parquet
-        key=extract_month, # Sort files by month number (e.g. 1 for 01, 2 for 02, etc.) to have a consistent order
+        DOWNLOAD_YELLOW_TRIPDATA.ensure_taxi_raw_files(),
+        key=extract_month,
     )
-
-    if not link_parquet_files:
-        print(f"INFO: No parquet files found in {TAXI_RAW_TEMP_DIR}. Skipping parquet schema check.")
-        return
 
     file_and_columns_types = {}
     files_mismatches = []
 
     for link_parquet_file in link_parquet_files:
-        parquet_file_obj = pq.ParquetFile(link_parquet_file) # Open the parquet file to read its schema
-        schema = parquet_file_obj.schema_arrow # Get the Arrow schema of the parquet file, which contains column names and types
+        parquet_file_obj = pq.ParquetFile(link_parquet_file)
+        schema = parquet_file_obj.schema_arrow
         file_and_columns_types[link_parquet_file.name] = {
-            field.name: str(field.type) for field in schema # Create a dictionary mapping column names to their types as strings for the current parquet file
+            field.name: str(field.type) for field in schema
         }
 
     reference_file = link_parquet_files[0].name
@@ -44,9 +39,8 @@ def main(conn):
     reference_pairs = set(reference_columns_types.items())
     all_match = True
 
-    # Compare only key:value pairs (column_name -> type).
     for file_name, columns_types in file_and_columns_types.items():
-        if file_name == reference_file: # Skip comparing the reference file with itself
+        if file_name == reference_file:
             continue
 
         current_pairs = set(columns_types.items())
@@ -77,14 +71,27 @@ def main(conn):
         )
 
     report = {
-        "input_directory": TAXI_RAW_TEMP_DIR.as_posix(),
-        "parquet_files": [link_parquet_file.name for link_parquet_file in link_parquet_files],
+        "files_directory": TAXI_RAW_TEMP_DIR.as_posix(),
+        "file_count": len(link_parquet_files),
+        "files": [link_parquet_file.name for link_parquet_file in link_parquet_files],
         "reference_file": reference_file,
         "column_count": len(reference_columns_types),
         "all_match": all_match,
-        "reference_columns_types": reference_columns_types,
-        "database_columns_types": database_columns_types,
+        "reference_schema": reference_columns_types,
+        "database_schema": database_columns_types,
         "files_mismatches": files_mismatches,
     }
-    output_file.write_text(json.dumps(report, indent=2, ensure_ascii=False) + "\n", encoding="utf-8")
-    print(f"Saved report: {output_file}")
+    write_json_compact(output_file, report)
+    print(f"EDA 01 saved: {output_file.name}")
+
+
+if __name__ == "__main__":
+    run_with_conn(main)
+
+
+
+
+
+
+
+

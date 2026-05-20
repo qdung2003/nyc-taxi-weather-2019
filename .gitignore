@@ -23,6 +23,8 @@ txt/
 *.parquet
 *.csv
 *.json
-*.html
 *.txt
 *.db
+
+# Generated dashboard data
+pipeline/dashboard/data.js
