@@ -14,6 +14,7 @@ else:
 PIPELINE_DIR = PROJECT_ROOT / "pipeline"
 TAXI_DIR = PIPELINE_DIR / "taxi"
 WEATHER_DIR = PIPELINE_DIR / "weather"
+FEATURE_DIR = PIPELINE_DIR / "feature"
 
 # Runtime data folders (outside source tree)
 DATA_DIR = PROJECT_ROOT / "data"
@@ -29,6 +30,7 @@ WEATHER_RAW_CSV = DATA_DIR / "NYC_Central_Park_weather_1869-2022.csv"
 # EDA results
 TAXI_EDA_RESULTS_DIR = TAXI_DIR / "eda" / "results"
 WEATHER_EDA_RESULTS_DIR = WEATHER_DIR / "eda" / "results"
+FEATURE_EDA_RESULTS_DIR = FEATURE_DIR / "eda" / "results"
 
 # Online urls
 TAXI_RAW_URL = "https://d37ci6vzurychx.cloudfront.net/trip-data"

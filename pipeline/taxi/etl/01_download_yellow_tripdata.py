@@ -1,4 +1,4 @@
-﻿import shutil, requests
+﻿import requests
 from tqdm import tqdm
 from pipeline.constants.paths import TAXI_RAW_TEMP_DIR, TAXI_RAW_URL
 from pipeline.constants.times import MONTHS, YEAR
@@ -12,10 +12,7 @@ def get_expected_taxi_raw_filenames() -> list[str]:
     ]
 
 
-def download_file(filenames: list[str] | None = None, *, reset_dir: bool = False) -> None:
-    if reset_dir and TAXI_RAW_TEMP_DIR.exists():
-        shutil.rmtree(TAXI_RAW_TEMP_DIR)
-
+def download_file(filenames: list[str] | None = None) -> None:
     TAXI_RAW_TEMP_DIR.mkdir(parents=True, exist_ok=True)
     filenames = filenames or get_expected_taxi_raw_filenames()
     overall_bar_setup = {
@@ -97,12 +94,11 @@ def ensure_taxi_raw_files() -> list:
 
 
 def main() -> None:
-    download_file(reset_dir=True)
+    ensure_taxi_raw_files()
 
 
 if __name__ == "__main__":
     main()
-
 
 
 

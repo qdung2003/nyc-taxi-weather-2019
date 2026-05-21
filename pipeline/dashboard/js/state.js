@@ -2,13 +2,13 @@
   const rawData = window.DASHBOARD_DATA || [];
   const dashboardData = Array.isArray(rawData)
     ? { taxi: Object.fromEntries(rawData.map((item, i) => [String(i + 1).padStart(2, '0'), { data: item }])) }
-    : ((rawData && (rawData.taxi || rawData.weather))
+    : ((rawData && (rawData.taxi || rawData.weather || rawData.feature))
       ? rawData
       : { taxi: ((rawData && rawData.steps) || {}) });
   const getAvailableSteps = (domain) => Object.keys(dashboardData[domain] || {})
     .filter((s) => /^\d+$/.test(String(s)))
     .sort((a, b) => Number(a) - Number(b));
-  const domains = ['taxi', 'weather'].filter((domain) => getAvailableSteps(domain).length);
+  const domains = ['taxi', 'weather', 'feature'].filter((domain) => getAvailableSteps(domain).length);
   let currentDomain = domains[0] || 'taxi';
 
   Object.assign(D, {

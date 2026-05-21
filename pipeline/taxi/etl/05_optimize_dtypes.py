@@ -19,10 +19,13 @@ def create_etl05_optimize_dtypes(conn) -> None:
             CAST(passenger_count AS UTINYINT) AS passenger_count,
             CAST(trip_distance AS FLOAT) AS trip_distance,
             CAST(RatecodeID AS UTINYINT) AS RatecodeID,
-            CASE
-                WHEN store_and_fwd_flag = 'Y' THEN true
-                WHEN store_and_fwd_flag = 'N' THEN false
-            END AS store_and_fwd_flag,
+            CAST(
+                CASE
+                    WHEN store_and_fwd_flag = 'Y' THEN true
+                    WHEN store_and_fwd_flag = 'N' THEN false
+                END
+                AS BOOLEAN
+            ) AS store_and_fwd_flag,
             CAST(PULocationID AS USMALLINT) AS PULocationID,
             CAST(DOLocationID AS USMALLINT) AS DOLocationID,
             CAST(payment_type AS UTINYINT) AS payment_type,

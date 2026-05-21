@@ -13,12 +13,12 @@ def create_weather04_optimize_dtypes(conn) -> None:
         f"""
         CREATE TABLE "{TABLE_WEATHER_CLEAN}" AS
         SELECT
-            CAST("DATE" AS DATE) AS "DATE",
-            CAST(PRCP AS FLOAT) AS PRCP,
-            CAST(SNOW AS FLOAT) AS SNOW,
-            CAST(SNWD AS FLOAT) AS SNWD,
-            CAST(TMIN AS FLOAT) AS TMIN,
-            CAST(TMAX AS FLOAT) AS TMAX
+            CAST("DATE" AS DATE) AS "date",
+            CAST(PRCP AS FLOAT) AS prcp,
+            CAST(SNOW AS FLOAT) AS snow,
+            CAST(SNWD AS FLOAT) AS snwd,
+            CAST(TMIN AS FLOAT) AS tmin,
+            CAST(TMAX AS FLOAT) AS tmax
         FROM "{TMP_WEATHER03}"
         """
     )

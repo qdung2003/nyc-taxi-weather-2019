@@ -2,6 +2,6 @@
 TABLE_TAXI_CLEAN = "taxi_clean"
 TABLE_WEATHER_RAW = "weather_raw"
 TABLE_WEATHER_CLEAN = "weather_clean"
-
+TABLE_TAXI_WEATHER_FEATURES = "taxi_weather_features"
 
 

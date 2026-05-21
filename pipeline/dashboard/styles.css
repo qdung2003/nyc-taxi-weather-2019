@@ -47,7 +47,7 @@ body {
   display: flex;
   gap: 8px;
   flex-wrap: wrap;
-  justify-content: space-between;
+  justify-content: flex-start;
   align-items: center;
   margin-top: 10px;
   padding-top: 0;
@@ -66,8 +66,11 @@ body {
 }
 
 .nav-group-weather {
-  justify-content: flex-end;
-  margin-left: auto;
+  justify-content: flex-start;
+}
+
+.nav-group-feature {
+  justify-content: flex-start;
 }
 
 .nav-label {
@@ -279,6 +282,31 @@ h3 { font-size: 17px; }
   min-height: 34px;
   text-align: left;
 }
+
+.feature03-control-row {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  justify-content: center;
+  gap: 8px 12px;
+  margin-top: 10px;
+}
+
+.feature03-control-row .subhead {
+  flex: 0 0 auto;
+  margin: 0;
+  text-align: center;
+}
+
+.feature03-control-row .tabbar {
+  justify-content: center;
+  margin: 0;
+}
+
+.feature03-control-row .tabbar .tab {
+  min-height: 32px;
+}
+
 .card.section > h2,
 .subhead {
   font-size: 14px;
@@ -491,9 +519,9 @@ button:disabled {
   }
 
   .nav-group,
-  .nav-group-weather {
+  .nav-group-weather,
+  .nav-group-feature {
     justify-content: center;
-    margin-left: 0;
   }
 
   .profile-top > .tabbar,

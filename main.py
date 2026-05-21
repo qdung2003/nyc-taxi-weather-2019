@@ -12,7 +12,7 @@ from typing import Iterable
 from pipeline.constants.paths import PIPELINE_DIR, PROJECT_ROOT
 
 
-DOMAINS = {"taxi", "weather"}
+DOMAINS = {"taxi", "weather", "feature"}
 STAGES = {"etl", "eda"}
 SCRIPT_NAME_PATTERN = re.compile(r"^(?P<step>\d{2})_.+\.py$")
 
@@ -21,6 +21,8 @@ SCRIPT_DIRS = {
     ("taxi", "eda"): PIPELINE_DIR / "taxi" / "eda" / "scripts",
     ("weather", "etl"): PIPELINE_DIR / "weather" / "etl",
     ("weather", "eda"): PIPELINE_DIR / "weather" / "eda" / "scripts",
+    ("feature", "etl"): PIPELINE_DIR / "feature" / "etl",
+    ("feature", "eda"): PIPELINE_DIR / "feature" / "eda" / "scripts",
 }
 
 
@@ -28,7 +30,7 @@ SCRIPT_DIRS = {
 def validate_domain(domain: str, option_name: str) -> str:
     domain = domain.strip().lower()
     if domain not in DOMAINS:
-        raise SystemExit(f"Invalid domain in {option_name}: '{domain}'. Use taxi or weather.")
+        raise SystemExit(f"Invalid domain in {option_name}: '{domain}'. Use taxi, weather, or feature.")
     return domain
 
 
@@ -68,7 +70,9 @@ def parse_list_value(parts: list[str]) -> tuple[str, str, str | None]:
 
 # ===== Script Discovery =====
 def get_scripts(domain: str, stage: str) -> list[tuple[str, Path]]:
-    script_dir = SCRIPT_DIRS[(domain, stage)]
+    script_dir = SCRIPT_DIRS.get((domain, stage))
+    if script_dir is None:
+        raise SystemExit(f"No script group configured for {domain}/{stage}.")
     if not script_dir.exists():
         raise SystemExit(f"Script directory not found: {script_dir}")
 
@@ -211,18 +215,19 @@ def handle_domain(domain: str) -> None:
 
 
 def handle_all() -> None:
-    print("Executing ALL flows in 2 parallel domain pipelines (Taxi & Weather)...")
+    print("Executing ALL flows: Taxi & Weather first, then Feature...")
     manager = get_connection_manager_cls()()
     try:
         with manager.get_connection() as shared_conn:
             with ThreadPoolExecutor(max_workers=2) as executor:
                 list(executor.map(lambda domain: run_domain_pipeline(domain, shared_conn), ["taxi", "weather"]))
+            run_domain_pipeline("feature", shared_conn)
     finally:
         manager.close()
 
 
 def handle_dashboard() -> None:
-    from pipeline.dashboard.dashboard import main as dashboard_main
+    from pipeline.dashboard.build import main as dashboard_main
 
     dashboard_main(open_html=True)
 
@@ -238,6 +243,7 @@ def build_parser() -> argparse.ArgumentParser:
             "  python main.py --only taxi etl 01\n"
             "  python main.py --list taxi etl\n"
             "  python main.py --list taxi eda 01\n"
+            "  python main.py --list feature etl\n"
             "  python main.py --taxi\n"
             "  python main.py --weather\n"
             "  python main.py --all\n"
@@ -246,11 +252,11 @@ def build_parser() -> argparse.ArgumentParser:
     parser.add_argument("command", nargs="?", choices=["dashboard"], help="Run dashboard data build + open HTML.")
 
     group = parser.add_mutually_exclusive_group(required=False)
-    group.add_argument("--only", nargs="+", metavar="ARGS", help="Run one or many scripts: <taxi|weather> <etl|eda> <NN> [NN ...].")
-    group.add_argument("--list", nargs="+", metavar="ARGS", help="Run all scripts in group: <taxi|weather> <etl|eda> [NN].")
+    group.add_argument("--only", nargs="+", metavar="ARGS", help="Run one or many scripts: <taxi|weather|feature> <etl|eda> <NN> [NN ...].")
+    group.add_argument("--list", nargs="+", metavar="ARGS", help="Run all scripts in group: <taxi|weather|feature> <etl|eda> [NN].")
     group.add_argument("--taxi", action="store_true", help="Run Taxi ETL then Taxi EDA.")
     group.add_argument("--weather", action="store_true", help="Run Weather ETL then Weather EDA.")
-    group.add_argument("--all", action="store_true", help="Run Taxi and Weather pipelines (ETL then EDA) in parallel.")
+    group.add_argument("--all", action="store_true", help="Run Taxi and Weather pipelines first, then Feature.")
     return parser
 
 

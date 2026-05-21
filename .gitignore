@@ -17,6 +17,7 @@ Thumbs.db
 data/
 test/
 txt/
+html/
 
 
 # Data files
@@ -26,5 +27,3 @@ txt/
 *.txt
 *.db
 
-# Generated dashboard data
-pipeline/dashboard/data.js

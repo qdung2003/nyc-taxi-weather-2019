@@ -1,12 +1,17 @@
 import json
 import os
 
-from pipeline.constants.paths import PROJECT_ROOT, TAXI_EDA_RESULTS_DIR, WEATHER_EDA_RESULTS_DIR
+from pipeline.constants.paths import (
+    FEATURE_EDA_RESULTS_DIR,
+    PROJECT_ROOT,
+    TAXI_EDA_RESULTS_DIR,
+    WEATHER_EDA_RESULTS_DIR,
+)
 from pipeline.services.helpers import dumps_json_compact
 
 
-DATA_JS_FILE = PROJECT_ROOT / "pipeline" / "dashboard" / "data.js"
-HTML_FILE = PROJECT_ROOT / "pipeline" / "dashboard" / "dashboard.html"
+DATA_JS_FILE = PROJECT_ROOT / "data" / "dashboard_data.js"
+HTML_FILE = PROJECT_ROOT / "pipeline" / "dashboard" / "index.html"
 
 TAXI_STEP_FILES = {
     "01": "01_schemas.json",
@@ -27,6 +32,12 @@ WEATHER_STEP_FILES = {
     "05": "05_after_business_rules.json",
 }
 
+FEATURE_STEP_FILES = {
+    "01": "01_profile_features.json",
+    "02": "02_daily_weather_metrics.json",
+    "03": "03_weather_impact_metrics.json",
+}
+
 
 def build_domain_payload(results_dir, step_files: dict[str, str]) -> dict:
     steps_data = {}
@@ -41,6 +52,7 @@ def build_payload() -> dict:
     return {
         "taxi": build_domain_payload(TAXI_EDA_RESULTS_DIR, TAXI_STEP_FILES),
         "weather": build_domain_payload(WEATHER_EDA_RESULTS_DIR, WEATHER_STEP_FILES),
+        "feature": build_domain_payload(FEATURE_EDA_RESULTS_DIR, FEATURE_STEP_FILES),
     }
 
 
