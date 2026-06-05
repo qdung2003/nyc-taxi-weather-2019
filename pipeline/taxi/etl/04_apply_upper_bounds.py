@@ -1,4 +1,4 @@
-import json
+import csv
 from pipeline.services.queries import (
     run_with_conn,
     compute_upper_bounds,
@@ -11,7 +11,7 @@ from pipeline.constants.paths import TAXI_EDA_RESULTS_DIR
 from pipeline.constants.tmp_tables import TMP_TAXI03, TMP_TAXI04
 
 
-upper_bounds_file = TAXI_EDA_RESULTS_DIR / "07_before_upper_bounds.json"
+upper_bounds_file = TAXI_EDA_RESULTS_DIR / "07_before_upper_bounds" / "column_bins.csv"
 
 
 def load_upper_bounds_from_eda07():
@@ -19,14 +19,15 @@ def load_upper_bounds_from_eda07():
         return None
 
     try:
-        report = json.loads(upper_bounds_file.read_text(encoding="utf-8"))
-    except (OSError, json.JSONDecodeError):
+        with upper_bounds_file.open("r", encoding="utf-8", newline="") as file:
+            rows = list(csv.DictReader(file))
+    except OSError:
         return None
 
     upper_bounds = {
-        str(column.get("column_name")): column.get("second_pass_value")
-        for column in report.get("columns", [])
-        if column.get("column_name") is not None
+        str(row.get("column_name")): row.get("second_pass_value")
+        for row in rows
+        if row.get("column_name") is not None
     }
 
     if any(column_name not in upper_bounds for column_name in MONEY_COLUMNS):

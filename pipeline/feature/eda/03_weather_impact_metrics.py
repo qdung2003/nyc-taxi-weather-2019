@@ -2,12 +2,12 @@ import importlib
 
 from pipeline.constants.paths import FEATURE_EDA_RESULTS_DIR
 from pipeline.constants.tables import TABLE_TAXI_WEATHER_FEATURES
-from pipeline.services.helpers import round_if_needed, write_json_compact
+from pipeline.services.helpers import reset_csv_dir, round_if_needed, write_csv, write_metadata_csv
 from pipeline.services.queries import ensure_table_exists, quote_identifier, run_with_conn
 
 
 FEATURE_EDA_RESULTS_DIR.mkdir(parents=True, exist_ok=True)
-output_file = FEATURE_EDA_RESULTS_DIR / "03_weather_impact_metrics.json"
+output_file = FEATURE_EDA_RESULTS_DIR / "03_weather_impact_metrics"
 
 METRICS = [
     "avg_trip_count",
@@ -18,6 +18,8 @@ METRICS = [
     "avg_total_amount",
 ]
 
+WEATHER_COLUMNS = ["prcp", "avg_temp", "temp_range"]
+
 
 def pct_diff(value, baseline):
     if baseline in (None, 0):
@@ -25,25 +27,19 @@ def pct_diff(value, baseline):
     return round_if_needed((value - baseline) / baseline * 100)
 
 
-def build_section_payload(rows, keys, group_by):
-    payload = {
-        "group_by": group_by,
-        "row_count": len(rows),
-    }
-    for key in keys:
-        payload[key] = []
-    payload["day_count"] = []
-    for metric in METRICS:
-        payload[metric] = []
-
+def build_section_rows(rows, keys):
+    section_rows = []
     for row in rows:
         row_values = dict(zip([*keys, "day_count", *METRICS], row))
-        for key in keys:
-            payload[key].append(row_values[key])
-        payload["day_count"].append(int(row_values["day_count"] or 0))
+        section_row = {
+            key: row_values[key]
+            for key in keys
+        }
+        section_row["day_count"] = int(row_values["day_count"] or 0)
         for metric in METRICS:
-            payload[metric].append(round_if_needed(row_values[metric]))
-    return payload
+            section_row[metric] = round_if_needed(row_values[metric])
+        section_rows.append(section_row)
+    return section_rows
 
 
 def build_fixed_level_sql(feature_table_quoted, column_name, level_name, cases_sql):
@@ -181,36 +177,22 @@ def build_temp_range_level_sql(feature_table_quoted):
     )
 
 
-def value_by_key(payload, key_name, key_value, metric):
-    keys = payload.get(key_name, [])
-    values = payload.get(metric, [])
-    for index, value in enumerate(keys):
-        if value == key_value:
-            return values[index]
+def value_by_key(rows, key_name, key_value, metric):
+    for row in rows:
+        if row.get(key_name) == key_value:
+            return row.get(metric)
     return None
 
 
-def value_by_two_keys(payload, first_key, first_value, second_key, second_value, metric):
-    first_values = payload.get(first_key, [])
-    second_values = payload.get(second_key, [])
-    metric_values = payload.get(metric, [])
-    for index, (left, right) in enumerate(zip(first_values, second_values)):
-        if left == first_value and right == second_value:
-            return metric_values[index]
+def value_by_two_keys(rows, first_key, first_value, second_key, second_value, metric):
+    for row in rows:
+        if row.get(first_key) == first_value and row.get(second_key) == second_value:
+            return row.get(metric)
     return None
 
 
 def build_summary(rain_status, rain_weekend, rain_level):
-    summary = {
-        "row_count": len(METRICS),
-        "metric": [],
-        "rain_pct": [],
-        "weekday_rain_pct": [],
-        "weekend_rain_pct": [],
-        "light_rain_pct": [],
-        "medium_rain_pct": [],
-        "heavy_rain_pct": [],
-    }
+    summary = []
     for metric in METRICS:
         no_rain = value_by_key(rain_status, "rain_status", "no_rain", metric)
         rain = value_by_key(rain_status, "rain_status", "rain", metric)
@@ -246,19 +228,22 @@ def build_summary(rain_status, rain_weekend, rain_level):
             "rain",
             metric,
         )
-        level_values = rain_level.get(metric, [])
-        level_baseline = level_values[0] if len(level_values) > 0 else None
-        level_2 = level_values[1] if len(level_values) > 1 else None
-        level_3 = level_values[2] if len(level_values) > 2 else None
-        level_4 = level_values[3] if len(level_values) > 3 else None
+        level_baseline = value_by_key(rain_level, "rain_level", "no_rain", metric)
+        level_2 = value_by_key(rain_level, "rain_level", "light_rain", metric)
+        level_3 = value_by_key(rain_level, "rain_level", "medium_rain", metric)
+        level_4 = value_by_key(rain_level, "rain_level", "heavy_rain", metric)
 
-        summary["metric"].append(metric)
-        summary["rain_pct"].append(pct_diff(rain, no_rain))
-        summary["weekday_rain_pct"].append(pct_diff(weekday_rain, weekday_no_rain))
-        summary["weekend_rain_pct"].append(pct_diff(weekend_rain, weekend_no_rain))
-        summary["light_rain_pct"].append(pct_diff(level_2, level_baseline))
-        summary["medium_rain_pct"].append(pct_diff(level_3, level_baseline))
-        summary["heavy_rain_pct"].append(pct_diff(level_4, level_baseline))
+        summary.append(
+            {
+                "metric": metric,
+                "rain_pct": pct_diff(rain, no_rain),
+                "weekday_rain_pct": pct_diff(weekday_rain, weekday_no_rain),
+                "weekend_rain_pct": pct_diff(weekend_rain, weekend_no_rain),
+                "light_rain_pct": pct_diff(level_2, level_baseline),
+                "medium_rain_pct": pct_diff(level_3, level_baseline),
+                "heavy_rain_pct": pct_diff(level_4, level_baseline),
+            }
+        )
     return summary
 
 
@@ -344,56 +329,38 @@ def main(conn):
 
     temp_range_level_rows = conn.execute(build_temp_range_level_sql(feature_table_quoted)).fetchall()
 
-    rain_status = build_section_payload(rain_status_rows, ["rain_status"], "rain_status")
-    rain_weekend = build_section_payload(
+    rain_status = build_section_rows(rain_status_rows, ["rain_status"])
+    rain_weekend = build_section_rows(
         rain_weekend_rows,
         ["day_type", "rain_status"],
-        "day_type, rain_status",
     )
-    rain_level = build_section_payload(rain_level_rows, ["rain_level", "value_range"], "rain_level")
-    avg_temp_level = build_section_payload(avg_temp_level_rows, ["avg_temp_level", "value_range"], "avg_temp_level")
-    temp_range_level = build_section_payload(temp_range_level_rows, ["temp_range_level", "value_range"], "temp_range_level")
+    rain_level = build_section_rows(rain_level_rows, ["rain_level", "value_range"])
+    avg_temp_level = build_section_rows(avg_temp_level_rows, ["avg_temp_level", "value_range"])
+    temp_range_level = build_section_rows(temp_range_level_rows, ["temp_range_level", "value_range"])
+    impact_rain_summary = build_summary(rain_status, rain_weekend, rain_level)
 
-    payload = {
-        "weather_columns": ["prcp", "avg_temp", "temp_range"],
-        "sections": [
-            "rain_status",
-            "rain_weekend",
-            "rain_level",
-            "avg_temp_level",
-            "temp_range_level",
-            "impact_summary",
-        ],
-        "rain_status": rain_status,
-        "rain_weekend": rain_weekend,
-        "rain_level": rain_level,
-        "avg_temp_level": avg_temp_level,
-        "temp_range_level": temp_range_level,
-        "impact_summary": build_summary(rain_status, rain_weekend, rain_level),
-    }
-    write_json_compact(
+    reset_csv_dir(output_file)
+    write_metadata_csv(
         output_file,
-        payload,
-        compact_all_scalar_arrays=True,
-        align_compact_array_items=False,
-        align_compact_array_key_labels=True,
-        parallel_array_groups=[
-            ("rain_status", "day_count", *METRICS),
-            ("day_type", "rain_status", "day_count", *METRICS),
-            ("rain_level", "value_range", "day_count", *METRICS),
-            ("avg_temp_level", "value_range", "day_count", *METRICS),
-            ("temp_range_level", "value_range", "day_count", *METRICS),
-            (
-                "metric",
-                "rain_pct",
-                "weekday_rain_pct",
-                "weekend_rain_pct",
-                "light_rain_pct",
-                "medium_rain_pct",
-                "heavy_rain_pct",
-            ),
-        ],
+        {
+            "weather_column_count": len(WEATHER_COLUMNS),
+            "metric_count": len(METRICS),
+        },
     )
+    write_csv(
+        output_file / "weather_columns.csv",
+        [{"column_name": column_name} for column_name in WEATHER_COLUMNS],
+    )
+    write_csv(
+        output_file / "metrics.csv",
+        [{"metric": metric} for metric in METRICS],
+    )
+    write_csv(output_file / "rain_status.csv", rain_status)
+    write_csv(output_file / "rain_weekend.csv", rain_weekend)
+    write_csv(output_file / "rain_level.csv", rain_level)
+    write_csv(output_file / "avg_temp_level.csv", avg_temp_level)
+    write_csv(output_file / "temp_range_level.csv", temp_range_level)
+    write_csv(output_file / "impact_rain_summary.csv", impact_rain_summary)
     print(f"Feature EDA 03 saved: {output_file.name}")
 
 

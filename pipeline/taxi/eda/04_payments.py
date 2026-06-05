@@ -1,4 +1,4 @@
-from pipeline.services.helpers import percentage, write_json_compact
+﻿from pipeline.services.helpers import percentage, reset_csv_dir, write_payments_csvs
 from pipeline.services.queries import ensure_table_exists, quote_identifier, run_with_conn
 from pipeline.constants.modules import ETL02_INGEST
 from pipeline.constants.tables import TABLE_TAXI_RAW
@@ -6,7 +6,7 @@ from pipeline.constants.paths import TAXI_EDA_RESULTS_DIR
 
 
 TAXI_EDA_RESULTS_DIR.mkdir(parents=True, exist_ok=True)
-output_file = TAXI_EDA_RESULTS_DIR / "04_payments.json"
+output_file = TAXI_EDA_RESULTS_DIR / "04_payments"
 
 
 ZERO_MONEY_COLUMNS = [
@@ -119,12 +119,16 @@ def main(conn):
             ],
         },
     ]
-    write_json_compact(output_file, report)
+    reset_csv_dir(output_file)
+    write_payments_csvs(output_file, report)
     print(f"EDA 04 saved: {output_file.name}")
 
 
 if __name__ == "__main__":
     run_with_conn(main)
+
+
+
 
 
 

@@ -1,11 +1,11 @@
-import json
+﻿import csv
 
 from pipeline.constants.modules import WEATHER02_INGEST
 from pipeline.constants.paths import WEATHER_EDA_RESULTS_DIR
 from pipeline.constants.tables import TABLE_WEATHER_RAW
 from pipeline.constants.times import YEAR
 from pipeline.constants.unique_settings import POSITIVE_BIN_COUNT
-from pipeline.services.helpers import write_json_compact
+from pipeline.services.helpers import reset_csv_dir, write_high_unique_csvs, write_metadata_csv
 from pipeline.services.queries import (
     build_high_unique_columns,
     calculate_valid_type_percentages,
@@ -17,26 +17,21 @@ from pipeline.services.queries import (
 
 
 WEATHER_EDA_RESULTS_DIR.mkdir(parents=True, exist_ok=True)
-output_file = WEATHER_EDA_RESULTS_DIR / "03_high_duplicates.json"
-profile_file = WEATHER_EDA_RESULTS_DIR / "02_low_duplicates.json"
+output_file = WEATHER_EDA_RESULTS_DIR / "03_high_duplicates"
+profile_file = WEATHER_EDA_RESULTS_DIR / "02_low_duplicates"
 
-COMPACT_ARRAY_PATHS = [
-    ("high_unique_columns", "*", "month_counts"),
-    ("high_unique_columns", "*", "month_percentages"),
-    ("high_unique_columns", "*", "bin_edges"),
-    ("high_unique_columns", "*", "bin_counts"),
-    ("high_unique_columns", "*", "bin_percentages"),
-]
 
 
 def get_high_unique_column_names(column_names: list[str]) -> list[str]:
-    if profile_file.exists():
-        profile_report = json.loads(profile_file.read_text(encoding="utf-8"))
-        high_unique_columns = [
-            str(column_meta.get("column_name"))
-            for column_meta in profile_report.get("high_unique_columns", [])
-            if column_meta.get("column_name") is not None
-        ]
+    profile_dir = profile_file.with_suffix("")
+    high_unique_csv = profile_dir / "high_unique_columns.csv"
+    if high_unique_csv.exists():
+        with high_unique_csv.open("r", encoding="utf-8", newline="") as file:
+            high_unique_columns = [
+                str(row["column_name"])
+                for row in csv.DictReader(file)
+                if row.get("column_name")
+            ]
         if high_unique_columns:
             return [column_name for column_name in column_names if column_name in set(high_unique_columns)]
     return [column_name for column_name in column_names if column_name in {"DATE", "PRCP"}]
@@ -105,25 +100,23 @@ def main(conn):
             high_unique_column["filter"] = build_filter(conn, weather_raw_quoted)
             break
 
-    report = {
-        "tail_ratio": "1/101",
-        "positive_bin_count": POSITIVE_BIN_COUNT,
-        "high_unique_column_count": len(high_unique_columns),
-        "high_unique_columns": high_unique_columns,
-    }
-    write_json_compact(
+    reset_csv_dir(output_file)
+    write_metadata_csv(
         output_file,
-        report,
-        compact_array_paths=COMPACT_ARRAY_PATHS,
-        align_compact_array_key_labels=True,
-        align_compact_array_items=True,
-        parallel_array_groups=[
-            ("month_counts", "month_percentages"),
-            ("bin_edges", "bin_counts", "bin_percentages"),
-        ],
+        {
+            "tail_ratio": "1/101",
+            "positive_bin_count": POSITIVE_BIN_COUNT,
+            "high_unique_column_count": len(high_unique_columns),
+        },
     )
+    write_high_unique_csvs(output_file, high_unique_columns)
     print(f"EDA 03 saved: {output_file.name}")
 
 
 if __name__ == "__main__":
     run_with_conn(main)
+
+
+
+
+

@@ -1,6 +1,6 @@
 import re
 import urllib.request
-from pipeline.constants.paths import WEATHER_RAW_CSV, WEATHER_RAW_URL
+from pipeline.constants.paths import WEATHER_RAW_FILE, WEATHER_RAW_URL
 
 
 def build_weather_download_url() -> str:
@@ -12,21 +12,21 @@ def build_weather_download_url() -> str:
 
 
 def download_weather_file(*, reset_file: bool = False) -> None:
-    if reset_file and WEATHER_RAW_CSV.exists():
-        WEATHER_RAW_CSV.unlink()
+    if reset_file and WEATHER_RAW_FILE.exists():
+        WEATHER_RAW_FILE.unlink()
 
-    WEATHER_RAW_CSV.parent.mkdir(parents=True, exist_ok=True)
+    WEATHER_RAW_FILE.parent.mkdir(parents=True, exist_ok=True)
     download_url = build_weather_download_url()
-    print(f"Downloading from {download_url}\nTo {WEATHER_RAW_CSV}...")
-    urllib.request.urlretrieve(download_url, str(WEATHER_RAW_CSV))
+    print(f"Downloading from {download_url}\nTo {WEATHER_RAW_FILE}...")
+    urllib.request.urlretrieve(download_url, str(WEATHER_RAW_FILE))
     print("Download completed successfully!")
 
 
 def ensure_weather_raw_file():
-    if not WEATHER_RAW_CSV.exists():
+    if not WEATHER_RAW_FILE.exists():
         print("INFO: Missing weather CSV file. Downloading...")
         download_weather_file()
-    return WEATHER_RAW_CSV
+    return WEATHER_RAW_FILE
 
 
 def main() -> None:

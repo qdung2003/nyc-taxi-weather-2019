@@ -1,4 +1,4 @@
-from pipeline.services.helpers import write_json_compact
+﻿from pipeline.services.helpers import reset_csv_dir, write_high_unique_csvs, write_metadata_csv
 from pipeline.services.queries import (
     build_high_unique_columns,
     calculate_valid_type_percentages,
@@ -16,17 +16,10 @@ from pipeline.constants.unique_settings import (
 from pipeline.constants.modules import ETL02_INGEST
 
 
-output_file = TAXI_EDA_RESULTS_DIR / "03_high_duplicates.json"
-profile_file = TAXI_EDA_RESULTS_DIR / "02_low_duplicates.json"
+output_file = TAXI_EDA_RESULTS_DIR / "03_high_duplicates"
+profile_file = TAXI_EDA_RESULTS_DIR / "02_low_duplicates"
 TAXI_EDA_RESULTS_DIR.mkdir(parents=True, exist_ok=True)
 
-COMPACT_ARRAY_PATHS = [
-    ("high_unique_columns", "*", "month_counts"),
-    ("high_unique_columns", "*", "month_percentages"),
-    ("high_unique_columns", "*", "bin_edges"),
-    ("high_unique_columns", "*", "bin_counts"),
-    ("high_unique_columns", "*", "bin_percentages"),
-]
 
 def main(conn):
     ensure_table_exists(conn, TABLE_TAXI_RAW, ETL02_INGEST.create_taxi_raw_table)
@@ -64,25 +57,22 @@ def main(conn):
     )
     high_unique_column_count = len(high_unique_columns)
 
-    report = {
-        "tail_ratio": "1/101",
-        "positive_bin_count": POSITIVE_BIN_COUNT,
-        "high_unique_column_count": high_unique_column_count,
-        "high_unique_columns": high_unique_columns,
-    }
-    write_json_compact(
+    reset_csv_dir(output_file)
+    write_metadata_csv(
         output_file,
-        report,
-        compact_array_paths=COMPACT_ARRAY_PATHS,
-        align_compact_array_key_labels=True,
-        align_compact_array_items=True,
-        parallel_array_groups=[
-            ("month_counts", "month_percentages"),
-            ("bin_edges", "bin_counts", "bin_percentages"),
-        ],
+        {
+            "tail_ratio": "1/101",
+            "positive_bin_count": POSITIVE_BIN_COUNT,
+            "high_unique_column_count": high_unique_column_count,
+        },
     )
+    write_high_unique_csvs(output_file, high_unique_columns)
     print(f"EDA 03 saved: {output_file.name}")
 
 
 if __name__ == "__main__":
     run_with_conn(main)
+
+
+
+

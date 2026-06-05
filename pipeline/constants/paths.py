@@ -18,6 +18,7 @@ FEATURE_DIR = PIPELINE_DIR / "feature"
 
 # Runtime data folders (outside source tree)
 DATA_DIR = PROJECT_ROOT / "data"
+EDA_RESULTS_DIR = DATA_DIR / "eda_results"
 
 # Single unified DuckDB for both taxi + weather domains.
 WAREHOUSE_DB_FILE = DATA_DIR / "taxi_and_weather.db"
@@ -25,12 +26,12 @@ DUCKDB_TEMP_DIR = DATA_DIR / "duckdb_temp"
 
 # Temp paths
 TAXI_RAW_TEMP_DIR = DATA_DIR / "taxi_raw_temp"
-WEATHER_RAW_CSV = DATA_DIR / "NYC_Central_Park_weather_1869-2022.csv"
+WEATHER_RAW_FILE = DATA_DIR / "NYC_Central_Park_weather_1869-2022.csv"
 
 # EDA results
-TAXI_EDA_RESULTS_DIR = TAXI_DIR / "eda" / "results"
-WEATHER_EDA_RESULTS_DIR = WEATHER_DIR / "eda" / "results"
-FEATURE_EDA_RESULTS_DIR = FEATURE_DIR / "eda" / "results"
+TAXI_EDA_RESULTS_DIR = EDA_RESULTS_DIR / "taxi"
+WEATHER_EDA_RESULTS_DIR = EDA_RESULTS_DIR / "weather"
+FEATURE_EDA_RESULTS_DIR = EDA_RESULTS_DIR / "feature"
 
 # Online urls
 TAXI_RAW_URL = "https://d37ci6vzurychx.cloudfront.net/trip-data"

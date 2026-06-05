@@ -1,13 +1,13 @@
-from pipeline.constants.modules import WEATHER02_INGEST
+﻿from pipeline.constants.modules import WEATHER02_INGEST
 from pipeline.constants.paths import WEATHER_EDA_RESULTS_DIR
 from pipeline.constants.tables import TABLE_WEATHER_RAW
 from pipeline.constants.times import YEAR
-from pipeline.services.helpers import percentage, write_json_compact
+from pipeline.services.helpers import percentage, reset_csv_dir, write_rules_csvs
 from pipeline.services.queries import ensure_table_exists, quote_identifier, run_with_conn
 
 
 WEATHER_EDA_RESULTS_DIR.mkdir(parents=True, exist_ok=True)
-output_file = WEATHER_EDA_RESULTS_DIR / "04_before_business_rules.json"
+output_file = WEATHER_EDA_RESULTS_DIR / "04_before_business_rules"
 
 RULES = [
     ("DATE", f"DATE >= {YEAR}-01-01", f'"DATE" >= DATE \'{YEAR}-01-01\''),
@@ -85,17 +85,23 @@ def main(conn):
 
     rules.sort(key=lambda item: -item["exclusive_removed_row_count"])
 
-    report = {
-        "raw_row_count": raw_row_count,
-        "clean_row_count": clean_row_count,
-        "removed_row_count": removed_row_count,
-        "removed_percentage": percentage(removed_row_count, raw_row_count),
-        "rule_count": len(rules),
-        "rules": rules,
-    }
-    write_json_compact(output_file, report)
+    reset_csv_dir(output_file)
+    write_rules_csvs(
+        output_file,
+        {
+            "raw_row_count": raw_row_count,
+            "clean_row_count": clean_row_count,
+            "removed_row_count": removed_row_count,
+            "removed_percentage": percentage(removed_row_count, raw_row_count),
+            "rule_count": len(rules),
+        },
+        rules,
+    )
     print(f"EDA 04 saved: {output_file.name}")
 
 
 if __name__ == "__main__":
     run_with_conn(main)
+
+
+

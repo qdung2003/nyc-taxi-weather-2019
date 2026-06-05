@@ -18,11 +18,11 @@ SCRIPT_NAME_PATTERN = re.compile(r"^(?P<step>\d{2})_.+\.py$")
 
 SCRIPT_DIRS = {
     ("taxi", "etl"): PIPELINE_DIR / "taxi" / "etl",
-    ("taxi", "eda"): PIPELINE_DIR / "taxi" / "eda" / "scripts",
+    ("taxi", "eda"): PIPELINE_DIR / "taxi" / "eda",
     ("weather", "etl"): PIPELINE_DIR / "weather" / "etl",
-    ("weather", "eda"): PIPELINE_DIR / "weather" / "eda" / "scripts",
+    ("weather", "eda"): PIPELINE_DIR / "weather" / "eda",
     ("feature", "etl"): PIPELINE_DIR / "feature" / "etl",
-    ("feature", "eda"): PIPELINE_DIR / "feature" / "eda" / "scripts",
+    ("feature", "eda"): PIPELINE_DIR / "feature" / "eda",
 }
 
 
@@ -96,8 +96,6 @@ def resolve_only_script(domain: str, stage: str, step: str) -> Path:
 
 
 def module_name_for_script(domain: str, stage: str, script: Path) -> str:
-    if stage == "eda":
-        return f"pipeline.{domain}.eda.scripts.{script.stem}"
     return f"pipeline.{domain}.{stage}.{script.stem}"
 
 

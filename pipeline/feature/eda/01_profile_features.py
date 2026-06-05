@@ -2,7 +2,12 @@ import importlib
 
 from pipeline.constants.paths import FEATURE_EDA_RESULTS_DIR
 from pipeline.constants.tables import TABLE_TAXI_WEATHER_FEATURES
-from pipeline.services.helpers import write_json_compact
+from pipeline.services.helpers import (
+    reset_csv_dir,
+    write_high_unique_csvs,
+    write_low_unique_csvs,
+    write_metadata_csv,
+)
 from pipeline.services.queries import (
     build_high_unique_columns,
     build_low_unique_columns,
@@ -16,7 +21,7 @@ from pipeline.services.queries import (
 
 
 FEATURE_EDA_RESULTS_DIR.mkdir(parents=True, exist_ok=True)
-output_file = FEATURE_EDA_RESULTS_DIR / "01_profile_features.json"
+output_file = FEATURE_EDA_RESULTS_DIR / "01_profile_features"
 
 
 def main(conn):
@@ -85,25 +90,17 @@ def main(conn):
         temp_prefix="tmp_feature_eda01",
     )
 
-    payload = {
-        "row_count": row_count,
-        "low_unique_column_count": len(low_unique_columns),
-        "high_unique_column_count": len(high_unique_columns),
-        "low_unique_columns": low_unique_columns,
-        "high_unique_columns": high_unique_columns,
-    }
-    write_json_compact(
+    reset_csv_dir(output_file)
+    write_metadata_csv(
         output_file,
-        payload,
-        compact_all_scalar_arrays=True,
-        align_compact_array_items=True,
-        align_compact_array_key_labels=True,
-        parallel_array_groups=[
-            ("values", "counts", "percentages"),
-            ("month_counts", "month_percentages"),
-            ("bin_edges", "bin_counts", "bin_percentages"),
-        ],
+        {
+            "row_count": row_count,
+            "low_unique_column_count": len(low_unique_columns),
+            "high_unique_column_count": len(high_unique_columns),
+        },
     )
+    write_low_unique_csvs(output_file, low_unique_columns)
+    write_high_unique_csvs(output_file, high_unique_columns)
     print(f"Feature EDA 01 saved: {output_file.name}")
 
 

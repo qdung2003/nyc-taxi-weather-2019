@@ -1,6 +1,8 @@
-﻿import json
+﻿import csv
+import json
 from decimal import Decimal
 from pathlib import Path
+from typing import Any
 
 
 
@@ -26,6 +28,285 @@ def round_if_needed(value, digits: int = 2):
 def percentage(part, total):
     return round_if_needed((part / total * 100) if total else 0.0)
 
+
+def is_schema_type_match(parquet_type: str | None, database_type: str | None) -> bool:
+    parquet_type = str(parquet_type or "").strip().upper()
+    database_type = str(database_type or "").strip().upper()
+    if not parquet_type or not database_type:
+        return False
+
+    parquet_to_database_candidates = {
+        "INT64": {"BIGINT", "INTEGER", "INT", "INT8"},
+        "DOUBLE": {"DOUBLE", "FLOAT", "REAL", "DECIMAL", "NUMERIC"},
+        "STRING": {"VARCHAR", "TEXT", "STRING"},
+        "DATE32[DAY]": {"DATE"},
+        "TIMESTAMP[US]": {"TIMESTAMP", "DATETIME"},
+        "BOOLEAN": {"BOOLEAN", "BOOL"},
+    }
+    candidates = parquet_to_database_candidates.get(parquet_type)
+    if candidates is None:
+        return parquet_type == database_type
+    return any(
+        database_type == candidate or database_type.startswith(f"{candidate}(")
+        for candidate in candidates
+    )
+
+
+def ordered_fieldnames(rows: list[dict[str, Any]]) -> list[str]:
+    preferred = [
+        "check",
+        "column_name",
+        "month",
+        "payment_type",
+        "key",
+        "value",
+        "count",
+        "percentage",
+        "month_count",
+        "month_percentage",
+        "bin_edge",
+        "bin_count",
+        "bin_percentage",
+    ]
+    fieldnames = [key for key in preferred if any(key in row for row in rows)]
+    for row in rows:
+        for key in row:
+            if key not in fieldnames:
+                fieldnames.append(key)
+    return fieldnames
+
+
+def write_csv(path: Path, rows: list[dict[str, Any]], *, preserve_header_underscores: bool = False) -> None:
+    if not rows:
+        return
+    path.parent.mkdir(parents=True, exist_ok=True)
+    fieldnames = ordered_fieldnames(rows)
+    output_fieldnames = (
+        fieldnames
+        if preserve_header_underscores
+        else [fieldname.replace("_", " ") for fieldname in fieldnames]
+    )
+    output_rows = [
+        {
+            output_fieldname: "null" if fieldname in row and row[fieldname] is None else row.get(fieldname)
+            for fieldname, output_fieldname in zip(fieldnames, output_fieldnames)
+        }
+        for row in rows
+    ]
+    with path.open("w", encoding="utf-8", newline="") as file:
+        writer = csv.DictWriter(file, fieldnames=output_fieldnames, extrasaction="ignore")
+        writer.writeheader()
+        writer.writerows(output_rows)
+
+
+def reset_csv_dir(path: Path) -> None:
+    import shutil
+
+    if path.exists():
+        shutil.rmtree(path)
+    path.mkdir(parents=True, exist_ok=True)
+
+
+def write_metadata_csv(output_dir: Path, metadata: dict[str, Any]) -> None:
+    write_csv(
+        output_dir / "metadata.csv",
+        [
+            {
+                key: ("yes" if value else "no") if isinstance(value, bool) else value
+                for key, value in metadata.items()
+            }
+        ],
+    )
+
+
+def write_key_value_csv(output_dir: Path, name: str, values: dict[str, Any]) -> None:
+    write_csv(
+        output_dir / f"{name}.csv",
+        [{"key": key, "value": value} for key, value in values.items()],
+    )
+
+
+def write_low_unique_csvs(output_dir: Path, rows: list[dict[str, Any]]) -> None:
+    columns = []
+    value_rows = []
+    for row in rows:
+        column_name = row.get("column_name")
+        columns.append(
+            {
+                **{
+                    key: value
+                    for key, value in row.items()
+                    if key not in {"values", "counts", "percentages"}
+                },
+            }
+        )
+        for value, count, percentage_value in zip(
+            row.get("values", []),
+            row.get("counts", []),
+            row.get("percentages", []),
+        ):
+            value_rows.append(
+                {
+                    "column_name": column_name,
+                    "value": value,
+                    "count": count,
+                    "percentage": percentage_value,
+                }
+            )
+    write_csv(output_dir / "low_unique_columns.csv", columns)
+    write_csv(output_dir / "low_unique_columns_array.csv", value_rows)
+
+
+def write_high_unique_csvs(
+    output_dir: Path,
+    rows: list[dict[str, Any]],
+    *,
+    base_name: str = "high_unique",
+) -> None:
+    simple_rows = []
+    datetime_rows = []
+    datetime_array_rows = []
+    numeric_rows = []
+    numeric_array_rows = []
+
+    for row in rows:
+        column_name = row.get("column_name")
+        common = {
+            **{
+                key: value
+                for key, value in row.items()
+                if key not in {
+                    "month_counts",
+                    "month_percentages",
+                    "bin_edges",
+                    "bin_counts",
+                    "bin_percentages",
+                    "filter",
+                }
+            },
+        }
+        filter_values = row.get("filter")
+        if isinstance(filter_values, dict):
+            for key, value in filter_values.items():
+                common[key] = value
+
+        if row.get("month_counts") or row.get("month_percentages"):
+            datetime_rows.append(common)
+            for month, (month_count, month_percentage) in enumerate(
+                zip(row.get("month_counts", []), row.get("month_percentages", [])),
+                start=1,
+            ):
+                datetime_array_rows.append(
+                    {
+                        "column_name": column_name,
+                        "month": month,
+                        "month_count": month_count,
+                        "month_percentage": month_percentage,
+                    }
+                )
+        elif row.get("bin_edges") or row.get("bin_counts") or row.get("bin_percentages"):
+            numeric_rows.append(common)
+            for bin_edge, bin_count, bin_percentage in zip(
+                row.get("bin_edges", []),
+                row.get("bin_counts", []),
+                row.get("bin_percentages", []),
+            ):
+                numeric_array_row = {
+                    "column_name": column_name,
+                    "bin_edge": bin_edge,
+                    "bin_count": bin_count,
+                    "bin_percentage": bin_percentage,
+                }
+                numeric_array_rows.append(numeric_array_row)
+        else:
+            simple_rows.append(common)
+
+    if simple_rows:
+        write_csv(output_dir / f"{base_name}_columns.csv", simple_rows)
+    if datetime_rows:
+        write_csv(output_dir / f"{base_name}_columns_datetime.csv", datetime_rows)
+        write_csv(output_dir / f"{base_name}_columns_datetime_array.csv", datetime_array_rows)
+    if numeric_rows:
+        write_csv(output_dir / f"{base_name}_columns_numeric.csv", numeric_rows)
+        write_csv(output_dir / f"{base_name}_columns_numeric_array.csv", numeric_array_rows)
+
+
+def write_rules_csvs(output_dir: Path, metadata: dict[str, Any], rules: list[dict[str, Any]]) -> None:
+    write_metadata_csv(output_dir, metadata)
+    write_csv(output_dir / "rules.csv", rules)
+
+
+def write_upper_bounds_csvs(output_dir: Path, metadata: dict[str, Any], rows: list[dict[str, Any]]) -> None:
+    write_metadata_csv(output_dir, metadata)
+    columns = []
+    array_rows = []
+    for row in rows:
+        column_name = row.get("column_name")
+        columns.append(
+            {
+                **{
+                    key: value
+                    for key, value in row.items()
+                    if key not in {"bin_edges", "bin_counts", "bin_percentages"}
+                },
+            }
+        )
+        for bin_edge, bin_count, bin_percentage in zip(
+            row.get("bin_edges", []),
+            row.get("bin_counts", []),
+            row.get("bin_percentages", []),
+        ):
+            array_rows.append(
+                {
+                    "column_name": column_name,
+                    "bin_edge": bin_edge,
+                    "bin_count": bin_count,
+                    "bin_percentage": bin_percentage,
+                }
+            )
+    write_csv(output_dir / "column_bins.csv", columns)
+    write_csv(output_dir / "column_bins_array.csv", array_rows)
+
+
+def write_payments_csvs(output_dir: Path, rows: list[dict[str, Any]]) -> None:
+    check_1 = rows[0]
+    check_2_3 = rows[1:]
+
+    write_csv(
+        output_dir / "check_1.csv",
+        [
+            {
+                "check": check_1["check"],
+                "description": check_1["description"],
+                "column_count": check_1["column_count"],
+            }
+        ],
+    )
+    write_csv(
+        output_dir / "check_1_array.csv",
+        [{"check": check_1["check"], **row} for row in check_1.get("columns", [])],
+    )
+    write_csv(
+        output_dir / "check_2_3.csv",
+        [
+            {
+                "check": row["check"],
+                "description": row["description"],
+                "payment_type": row["payment_type"],
+                "row_count": row["row_count"],
+                "column_count": row["column_count"],
+            }
+            for row in check_2_3
+        ],
+    )
+    write_csv(
+        output_dir / "check_2_3_array.csv",
+        [
+            {"check": row["check"], **column}
+            for row in check_2_3
+            for column in row.get("columns", [])
+        ],
+    )
 
 # format json
 def write_json_compact(
@@ -230,3 +511,5 @@ def _path_matches(path: tuple, patterns: list[tuple]) -> bool:
         if matched:
             return True
     return False
+
+

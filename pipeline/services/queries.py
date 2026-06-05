@@ -1,6 +1,7 @@
 """Helpers for reading DuckDB tables/views in Arrow chunks for EDA scripts."""
 from datetime import datetime
 from pathlib import Path
+import csv
 import json
 from tqdm import tqdm
 from pipeline.services.connect import connect_warehouse
@@ -178,7 +179,7 @@ def get_column_groups(
     profile_file: Path | None = None,
     desc: str = "EDA 03 - detecting column groups",
 ) -> tuple[list[str], list[str]]:
-    if profile_file and profile_file.exists():
+    if profile_file and profile_file.is_file():
         profile_report = json.loads(profile_file.read_text(encoding="utf-8"))
         low_unique_columns = [
             str(column_meta.get("column_name"))
@@ -192,6 +193,21 @@ def get_column_groups(
                 for column_meta in high_unique_column_meta
                 if column_meta.get("column_name") is not None
             ]
+            profile_column_names = low_unique_columns + high_unique_columns
+            if len(profile_column_names) == len(column_names) and set(profile_column_names) == set(column_names):
+                low_unique_column_set = set(low_unique_columns)
+                high_unique_column_set = set(high_unique_columns)
+                return (
+                    [column_name for column_name in column_names if column_name in low_unique_column_set],
+                    [column_name for column_name in column_names if column_name in high_unique_column_set],
+                )
+    if profile_file:
+        profile_dir = profile_file.with_suffix("") if profile_file.suffix else profile_file
+        low_unique_csv = profile_dir / "low_unique_columns.csv"
+        high_unique_csv = profile_dir / "high_unique_columns.csv"
+        if low_unique_csv.exists() and high_unique_csv.exists():
+            low_unique_columns = read_column_names_csv(low_unique_csv)
+            high_unique_columns = read_column_names_csv(high_unique_csv)
             profile_column_names = low_unique_columns + high_unique_columns
             if len(profile_column_names) == len(column_names) and set(profile_column_names) == set(column_names):
                 low_unique_column_set = set(low_unique_columns)
@@ -224,6 +240,17 @@ def get_column_groups(
         else:
             high_unique_columns.append(column_name)
     return low_unique_columns, high_unique_columns
+
+
+def read_column_names_csv(path: Path) -> list[str]:
+    with path.open("r", encoding="utf-8", newline="") as file:
+        reader = csv.DictReader(file)
+        column_name_field = "column_name" if "column_name" in (reader.fieldnames or []) else "column name"
+        return [
+            str(row[column_name_field])
+            for row in reader
+            if row.get(column_name_field)
+        ]
 
 
 def get_column_data_types(column_type_rows, column_names: list[str]) -> list[str]:
