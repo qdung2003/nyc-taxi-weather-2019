@@ -113,14 +113,22 @@ def main(conn):
     reset_csv_dir(output_file)
     write_metadata_csv(
         output_file,
-        {
-            "warehouse_database_path": WAREHOUSE_DB_FILE.as_posix(),
-            "table": TABLE_TAXI_RAW,
-            "row_count": row_count,
-            "max_unique_values": MAX_UNIQUE_VALUES,
-            "low_unique_column_count": len(low_unique_columns),
-            "high_unique_column_count": len(high_unique_columns),
-        },
+        keys=[
+            "warehouse_database_path",
+            "table",
+            "row_count",
+            "max_unique_values",
+            "low_unique_column_count",
+            "high_unique_column_count",
+        ],
+        values=[
+            WAREHOUSE_DB_FILE.as_posix(),
+            TABLE_TAXI_RAW,
+            row_count,
+            MAX_UNIQUE_VALUES,
+            len(low_unique_columns),
+            len(high_unique_columns),
+        ],
     )
     write_low_unique_csvs(output_file, low_unique_columns)
     write_high_unique_csvs(output_file, high_unique_columns)
@@ -129,7 +137,6 @@ def main(conn):
 
 if __name__ == "__main__":
     run_with_conn(main)
-
 
 
 

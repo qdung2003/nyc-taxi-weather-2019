@@ -103,11 +103,16 @@ def main(conn):
     reset_csv_dir(output_file)
     write_metadata_csv(
         output_file,
-        {
-            "tail_ratio": "1/101",
-            "positive_bin_count": POSITIVE_BIN_COUNT,
-            "high_unique_column_count": len(high_unique_columns),
-        },
+        keys=[
+            "tail_ratio",
+            "positive_bin_count",
+            "high_unique_column_count",
+        ],
+        values=[
+            "1/101",
+            POSITIVE_BIN_COUNT,
+            len(high_unique_columns),
+        ],
     )
     write_high_unique_csvs(output_file, high_unique_columns)
     print(f"EDA 03 saved: {output_file.name}")

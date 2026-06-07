@@ -1,9 +1,9 @@
-﻿from pipeline.services.helpers import percentage, reset_csv_dir, write_rules_csvs
-from pipeline.services.queries import ensure_table_exists, quote_identifier, run_with_conn
 from pipeline.constants.modules import ETL02_INGEST
-from pipeline.constants.tables import TABLE_TAXI_RAW
 from pipeline.constants.paths import TAXI_EDA_RESULTS_DIR
+from pipeline.constants.tables import TABLE_TAXI_RAW
 from pipeline.constants.times import YEAR
+from pipeline.services.helpers import percentage, reset_csv_dir, write_csv, write_metadata_csv
+from pipeline.services.queries import ensure_table_exists, quote_identifier, run_with_conn
 
 
 output_file = TAXI_EDA_RESULTS_DIR / "05_before_business_rules"
@@ -90,37 +90,38 @@ def main(conn):
             {
                 "rule_name": rule_name,
                 "column_name": column_name,
-                "invalid_row_count": invalid_row_count,
-                "exclusive_removed_row_count": exclusive_removed_row_count,
-                "shared_removed_row_count": shared_removed_row_count,
-                "invalid_row_percentage": percentage(invalid_row_count, raw_row_count),
+                "invalid_count": invalid_row_count,
+                "exclusive_removed_count": exclusive_removed_row_count,
+                "shared_removed_count": shared_removed_row_count,
+                "invalid_percentage": percentage(invalid_row_count, raw_row_count),
                 "exclusive_removed_percentage": percentage(exclusive_removed_row_count, raw_row_count),
                 "shared_removed_percentage": percentage(shared_removed_row_count, raw_row_count),
             }
         )
 
-    rules.sort(key=lambda item: -item["exclusive_removed_row_count"])
+    rules.sort(key=lambda item: -item["exclusive_removed_count"])
 
     reset_csv_dir(output_file)
-    write_rules_csvs(
+    write_metadata_csv(
         output_file,
-        {
-            "raw_row_count": raw_row_count,
-            "clean_row_count": clean_row_count,
-            "removed_row_count": removed_row_count,
-            "removed_percentage": percentage(removed_row_count, raw_row_count),
-            "rule_count": len(rules),
-        },
-        rules,
+        keys=[
+            "raw_count",
+            "clean_count",
+            "removed_count",
+            "removed_percentage",
+            "rule_count",
+        ],
+        values=[
+            raw_row_count,
+            clean_row_count,
+            removed_row_count,
+            percentage(removed_row_count, raw_row_count),
+            len(rules),
+        ],
     )
+    write_csv(output_file / "rules.csv", rules)
     print(f"EDA 05 saved: {output_file.name}")
 
 
 if __name__ == "__main__":
     run_with_conn(main)
-
-
-
-
-
-

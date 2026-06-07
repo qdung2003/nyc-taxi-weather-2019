@@ -46,13 +46,11 @@ function rulesTemplate(title) {
       </div>
       <svg id="chart" class="chart-frame" viewBox="0 0 1080 320" preserveAspectRatio="xMidYMid meet"></svg>
       <div class="legend">
-        <div><span class="dot" style="background:#0f766e;"></span>exclusive_removed_row_count</div>
-        <div><span class="dot" style="background:#d97706;"></span>shared_removed_row_count</div>
+        <div><span class="dot" style="background:#0f766e;"></span>exclusive_removed_count</div>
+        <div><span class="dot" style="background:#d97706;"></span>shared_removed_count</div>
       </div>
       <table class="eda05-rules-table">
-        <thead>
-          <tr><th>rule_name</th><th>column_name</th><th>invalid_count</th><th>exclusive_count</th><th>shared_count</th><th>invalid_percentage</th><th>exclusive_percentage</th><th>shared_percentage</th></tr>
-        </thead>
+        <thead><tr id="rulesHead"></tr></thead>
         <tbody id="rulesBody"></tbody>
       </table>
     </div>
@@ -69,7 +67,7 @@ const STEP_TEMPLATES = {
           <button id="k01FilesToggle" class="k01-files-toggle" type="button"></button>
           <div id="k01FilesList" class="hidden k01-files-list">
             <table class="files-table file-list-table">
-              <thead></thead>
+              <thead id="k01FilesHead"></thead>
               <tbody id="k01FilesBody"></tbody>
             </table>
           </div>
@@ -79,12 +77,12 @@ const STEP_TEMPLATES = {
     <div class="card section">
       <h2>Schema Compare</h2>
       <table class="files-table schema-table">
-        <thead><tr><th>Column</th><th>Reference</th><th>Database</th><th>Status</th></tr></thead>
+        <thead><tr id="k01SchemaHead"></tr></thead>
         <tbody id="k01SchemaBody"></tbody>
       </table>
     </div>
     <div class="card section">
-      <h2>File Mismatches</h2>
+      <h2>File List</h2>
       <table>
         <thead><tr><th>File</th><th>Mismatches</th></tr></thead>
         <tbody id="k01MismatchBody"></tbody>

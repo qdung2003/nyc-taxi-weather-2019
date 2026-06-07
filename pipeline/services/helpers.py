@@ -76,7 +76,7 @@ def ordered_fieldnames(rows: list[dict[str, Any]]) -> list[str]:
     return fieldnames
 
 
-def write_csv(path: Path, rows: list[dict[str, Any]], *, preserve_header_underscores: bool = False) -> None:
+def write_csv(path: Path, rows: list[dict[str, Any]], *, preserve_header_underscores: bool = True) -> None:
     if not rows:
         return
     path.parent.mkdir(parents=True, exist_ok=True)
@@ -107,16 +107,29 @@ def reset_csv_dir(path: Path) -> None:
     path.mkdir(parents=True, exist_ok=True)
 
 
-def write_metadata_csv(output_dir: Path, metadata: dict[str, Any]) -> None:
-    write_csv(
-        output_dir / "metadata.csv",
-        [
-            {
-                key: ("yes" if value else "no") if isinstance(value, bool) else value
-                for key, value in metadata.items()
-            }
-        ],
-    )
+def write_metadata_csv(
+    output_dir: Path,
+    metadata: dict[str, Any] | None = None,
+    *,
+    keys: list[str] | None = None,
+    values: list[Any] | None = None,
+) -> None:
+    if metadata is not None:
+        keys = list(metadata.keys())
+        values = list(metadata.values())
+    if keys is None or values is None:
+        raise ValueError("write_metadata_csv requires either metadata or both keys and values")
+    if len(keys) != len(values):
+        raise ValueError("write_metadata_csv keys and values must have the same length")
+
+    rows = [
+        {
+            "key": key,
+            "value": ("yes" if value else "no") if isinstance(value, bool) else value,
+        }
+        for key, value in zip(keys, values)
+    ]
+    write_csv(output_dir / "metadata.csv", rows, preserve_header_underscores=True)
 
 
 def write_key_value_csv(output_dir: Path, name: str, values: dict[str, Any]) -> None:
@@ -230,83 +243,6 @@ def write_high_unique_csvs(
         write_csv(output_dir / f"{base_name}_columns_numeric.csv", numeric_rows)
         write_csv(output_dir / f"{base_name}_columns_numeric_array.csv", numeric_array_rows)
 
-
-def write_rules_csvs(output_dir: Path, metadata: dict[str, Any], rules: list[dict[str, Any]]) -> None:
-    write_metadata_csv(output_dir, metadata)
-    write_csv(output_dir / "rules.csv", rules)
-
-
-def write_upper_bounds_csvs(output_dir: Path, metadata: dict[str, Any], rows: list[dict[str, Any]]) -> None:
-    write_metadata_csv(output_dir, metadata)
-    columns = []
-    array_rows = []
-    for row in rows:
-        column_name = row.get("column_name")
-        columns.append(
-            {
-                **{
-                    key: value
-                    for key, value in row.items()
-                    if key not in {"bin_edges", "bin_counts", "bin_percentages"}
-                },
-            }
-        )
-        for bin_edge, bin_count, bin_percentage in zip(
-            row.get("bin_edges", []),
-            row.get("bin_counts", []),
-            row.get("bin_percentages", []),
-        ):
-            array_rows.append(
-                {
-                    "column_name": column_name,
-                    "bin_edge": bin_edge,
-                    "bin_count": bin_count,
-                    "bin_percentage": bin_percentage,
-                }
-            )
-    write_csv(output_dir / "column_bins.csv", columns)
-    write_csv(output_dir / "column_bins_array.csv", array_rows)
-
-
-def write_payments_csvs(output_dir: Path, rows: list[dict[str, Any]]) -> None:
-    check_1 = rows[0]
-    check_2_3 = rows[1:]
-
-    write_csv(
-        output_dir / "check_1.csv",
-        [
-            {
-                "check": check_1["check"],
-                "description": check_1["description"],
-                "column_count": check_1["column_count"],
-            }
-        ],
-    )
-    write_csv(
-        output_dir / "check_1_array.csv",
-        [{"check": check_1["check"], **row} for row in check_1.get("columns", [])],
-    )
-    write_csv(
-        output_dir / "check_2_3.csv",
-        [
-            {
-                "check": row["check"],
-                "description": row["description"],
-                "payment_type": row["payment_type"],
-                "row_count": row["row_count"],
-                "column_count": row["column_count"],
-            }
-            for row in check_2_3
-        ],
-    )
-    write_csv(
-        output_dir / "check_2_3_array.csv",
-        [
-            {"check": row["check"], **column}
-            for row in check_2_3
-            for column in row.get("columns", [])
-        ],
-    )
 
 # format json
 def write_json_compact(

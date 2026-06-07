@@ -1,12 +1,5 @@
 # Python
 __pycache__/
-*.py[cod]
-.pytest_cache/
-
-# OS/editor noise
-.DS_Store
-Thumbs.db
-*.log
 
 # Environment and secrets
 .venv/
@@ -15,15 +8,3 @@ Thumbs.db
 
 # Directories to ignore
 data/
-test/
-txt/
-html/
-
-
-# Data files
-*.parquet
-*.csv
-*.json
-*.txt
-*.db
-

@@ -1,8 +1,8 @@
-﻿from pipeline.services.helpers import percentage, reset_csv_dir, write_payments_csvs
-from pipeline.services.queries import ensure_table_exists, quote_identifier, run_with_conn
 from pipeline.constants.modules import ETL02_INGEST
-from pipeline.constants.tables import TABLE_TAXI_RAW
 from pipeline.constants.paths import TAXI_EDA_RESULTS_DIR
+from pipeline.constants.tables import TABLE_TAXI_RAW
+from pipeline.services.helpers import percentage, reset_csv_dir, write_csv
+from pipeline.services.queries import ensure_table_exists, quote_identifier, run_with_conn
 
 
 TAXI_EDA_RESULTS_DIR.mkdir(parents=True, exist_ok=True)
@@ -73,35 +73,30 @@ def main(conn):
     payment4_total = payment_totals[4]
     payment_types = [1, 2, 3, 4]
 
-    report = [
+    check_1_rows = [
         {
             "check": 1,
             "description": "Tip rate = 0 in 4 payment_type items (1, 2, 3, 4).",
             "column_count": len(payment_types),
-            "columns": [
-                {
-                    "payment_type": payment_type,
-                    "tip_0_count": check1_tip_zero_by_payment[payment_type],
-                    "total_count": payment_totals[payment_type],
-                    "percent": percentage(check1_tip_zero_by_payment[payment_type], payment_totals[payment_type]),
-                }
-                for payment_type in payment_types
-            ],
-        },
+        }
+    ]
+    check_1_array_rows = [
+        {
+            "check": 1,
+            "payment_type": payment_type,
+            "tip_0_count": check1_tip_zero_by_payment[payment_type],
+            "total_count": payment_totals[payment_type],
+            "percent": percentage(check1_tip_zero_by_payment[payment_type], payment_totals[payment_type]),
+        }
+        for payment_type in payment_types
+    ]
+    check_2_3_rows = [
         {
             "check": 2,
             "description": "In the payment_type = 3 group, check that the rate = 0 for each money column.",
             "payment_type": 3,
             "row_count": payment3_total,
             "column_count": len(ZERO_MONEY_COLUMNS),
-            "columns": [
-                {
-                    "column_name": column_name,
-                    "count": zero_map[(3, column_name)],
-                    "percent": percentage(zero_map[(3, column_name)], payment3_total),
-                }
-                for column_name in ZERO_MONEY_COLUMNS
-            ],
         },
         {
             "check": 3,
@@ -109,32 +104,26 @@ def main(conn):
             "payment_type": 4,
             "row_count": payment4_total,
             "column_count": len(ZERO_MONEY_COLUMNS),
-            "columns": [
-                {
-                    "column_name": column_name,
-                    "count": zero_map[(4, column_name)],
-                    "percent": percentage(zero_map[(4, column_name)], payment4_total),
-                }
-                for column_name in ZERO_MONEY_COLUMNS
-            ],
         },
     ]
+    check_2_3_array_rows = [
+        {
+            "check": check,
+            "column_name": column_name,
+            "count": zero_map[(payment_type, column_name)],
+            "percent": percentage(zero_map[(payment_type, column_name)], total_count),
+        }
+        for check, payment_type, total_count in [(2, 3, payment3_total), (3, 4, payment4_total)]
+        for column_name in ZERO_MONEY_COLUMNS
+    ]
+
     reset_csv_dir(output_file)
-    write_payments_csvs(output_file, report)
+    write_csv(output_file / "check_1.csv", check_1_rows)
+    write_csv(output_file / "check_1_array.csv", check_1_array_rows)
+    write_csv(output_file / "check_2_3.csv", check_2_3_rows)
+    write_csv(output_file / "check_2_3_array.csv", check_2_3_array_rows)
     print(f"EDA 04 saved: {output_file.name}")
 
 
 if __name__ == "__main__":
     run_with_conn(main)
-
-
-
-
-
-
-
-
-
-
-
-

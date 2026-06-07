@@ -16,8 +16,6 @@
     render05,
     renderFeature02,
     renderFeature03Combined,
-    renderFeatureCategoryMetrics,
-    renderFeature06,
     renderProfileTab,
     renderPrimitiveKpis,
   } = D;
@@ -109,31 +107,6 @@
         </table>
       </div>
     `;
-    if (domain === 'feature' && step === '06') return `
-      <div class="card">
-        <h1>Feature EDA 06: weather impact summary</h1>
-        <div class="profile-top">
-          <div class="kpis meta-common"></div>
-        </div>
-      </div>
-      <div class="card section">
-        <div class="subhead">Percent difference from baseline</div>
-        <table class="feature-summary-table">
-          <thead>
-            <tr>
-              <th>metric</th>
-              <th>rain_pct</th>
-              <th>weekday_rain_pct</th>
-              <th>weekend_rain_pct</th>
-              <th>light_rain_pct</th>
-              <th>medium_rain_pct</th>
-              <th>heavy_rain_pct</th>
-            </tr>
-          </thead>
-          <tbody id="feature06Body"></tbody>
-        </table>
-      </div>
-    `;
     if (domain === 'weather' && step === '04') return rulesTemplate('EDA 04: before business rules');
     if (domain === 'weather' && step === '05') return profileTemplate('EDA 05: after business rules');
     return STEP_TEMPLATES[step] || '';
@@ -143,9 +116,6 @@
     if (domain === 'feature' && step === '01') return (root, data) => renderProfileTab(root, data, '06');
     if (domain === 'feature' && step === '02') return renderFeature02;
     if (domain === 'feature' && step === '03') return renderFeature03Combined;
-    if (domain === 'feature' && step === '04') return (root, data) => renderFeatureCategoryMetrics(root, data, 'day_type_rain_status');
-    if (domain === 'feature' && step === '05') return (root, data) => renderFeatureCategoryMetrics(root, data, 'rain_level');
-    if (domain === 'feature' && step === '06') return renderFeature06;
     if (domain === 'weather' && step === '04') return render05;
     if (domain === 'weather' && step === '05') return (root, data) => renderProfileTab(root, data, '06');
     return STEP_RENDERERS[step];

@@ -38,12 +38,18 @@ def main(conn):
     reset_csv_dir(output_file)
     write_metadata_csv(
         output_file,
-        {
-            "file_directory": weather_csv.parent.as_posix(),
-            "file_name": weather_csv.name,
-            "column_count": len(reference_schema),
-            "all_match": all_match,
-        },
+        keys=[
+            "file_directory",
+            "file_name",
+            "column_count",
+            "all_match",
+        ],
+        values=[
+            weather_csv.parent.as_posix(),
+            weather_csv.name,
+            len(reference_schema),
+            all_match,
+        ],
     )
     write_csv(
         output_file / "schema.csv",

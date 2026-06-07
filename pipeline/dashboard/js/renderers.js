@@ -2,12 +2,12 @@
   const {
     q,
     esc,
+    displayLabel,
     fmtInt,
     fmtPct,
     kvRowHtml,
     mk,
     balanceFlexRows,
-    isSchemaTypeMatch,
     renderInnerTabs,
     renderScalarChips,
     isPlainObject,
@@ -24,7 +24,9 @@ function render01(root, data) {
   const kpis = root.querySelector('.kpis');
   const filesToggle = q(root, 'k01FilesToggle');
   const filesList = q(root, 'k01FilesList');
+  const filesHead = q(root, 'k01FilesHead');
   const filesBody = q(root, 'k01FilesBody');
+  const schemaHead = q(root, 'k01SchemaHead');
   const schemaBody = q(root, 'k01SchemaBody');
   const mismatchBody = q(root, 'k01MismatchBody');
   if (kpis) {
@@ -37,11 +39,15 @@ function render01(root, data) {
   }
 
   if (filesList && filesBody) {
-    const files = data.files || [];
+    const fileRows = data.files_rows || [];
+    const files = fileRows.map((row, idx) => ({
+      index: row.index ?? idx + 1,
+      file: row.file ?? row.file_name ?? '',
+    }));
     const fileTable = filesBody.closest('table');
     const filesWrap = filesList.closest('.eda01-files');
     if (!files.length && filesWrap) filesWrap.classList.add('hidden');
-    const fileHead = fileTable?.querySelector('thead');
+    const fileHeaders = data.files_headers || ['index', 'file'];
     const renderFileList = () => {
       const availableWidth = filesList.parentElement?.clientWidth || filesList.clientWidth || 720;
       const cols = Math.max(1, Math.min(4, files.length || 1, Math.floor(availableWidth / 190) || 1));
@@ -51,21 +57,25 @@ function render01(root, data) {
         return Array.from({ length: rowsPerCol }, (_, r) => {
           const idx = start + r;
           if (idx >= files.length) return null;
-          return { index: idx + 1, name: files[idx] };
+          return files[idx];
         });
       });
       if (fileTable) {
         fileTable.style.setProperty('--file-cols', String(cols));
         fileTable.style.setProperty('--file-index-total', `${cols * 52}px`);
       }
-      if (fileHead) {
-        fileHead.innerHTML = `<tr>${Array.from({ length: cols }, () => '<th>#</th><th>File name</th>').join('')}</tr>`;
-      }
+        if (filesHead) {
+          const headerPair = [
+            `<th>${esc(displayLabel(fileHeaders[0] ?? 'index'))}</th>`,
+            `<th>${esc(displayLabel(fileHeaders[1] ?? 'file'))}</th>`,
+          ].join('');
+          filesHead.innerHTML = `<tr>${Array.from({ length: cols }, () => headerPair).join('')}</tr>`;
+        }
       filesBody.innerHTML = Array.from({ length: rowsPerCol }, (_, r) => {
         const cells = columns.map((col) => col[r]);
         const tds = cells.map((cell) => (
           cell
-            ? `<td>${cell.index}</td><td><code>${esc(cell.name)}</code></td>`
+            ? `<td>${esc(cell.index)}</td><td><code>${esc(cell.file)}</code></td>`
             : '<td></td><td></td>'
         )).join('');
         return `<tr>${tds}</tr>`;
@@ -97,15 +107,17 @@ function render01(root, data) {
   }
 
   if (schemaBody) {
-    const ref = data.reference_schema || {};
-    const db = data.database_schema || {};
-    const keys = Object.keys(ref);
-    schemaBody.innerHTML = keys
-      .map((k) => {
-        const refType = String(ref[k] ?? '');
-        const dbType = String(db[k] ?? '');
-        const isMatch = isSchemaTypeMatch(refType, dbType);
-        return `<tr><td><code>${esc(k)}</code></td><td>${esc(refType)}</td><td>${esc(dbType)}</td><td><span class="status-badge ${isMatch ? 'match' : 'mismatch'}">${isMatch ? 'Match' : 'Mismatch'}</span></td></tr>`;
+    const schemaHeaders = data.schema_headers || ['column name', 'parquet type', 'database type', 'match'];
+    if (schemaHead) {
+      schemaHead.innerHTML = schemaHeaders.map((header) => `<th>${esc(displayLabel(header))}</th>`).join('');
+    }
+    const schemaRows = data.schema_rows || [];
+    schemaBody.innerHTML = schemaRows
+      .map((row) => {
+        const columnName = row.column_name ?? '';
+        const referenceType = row.parquet_type ?? row.csv_type ?? '';
+        const databaseType = row.database_type ?? '';
+        return `<tr><td><code>${esc(columnName)}</code></td><td>${esc(referenceType)}</td><td>${esc(databaseType)}</td><td>${esc(row.match ?? '')}</td></tr>`;
       })
       .join('');
   }
@@ -119,7 +131,7 @@ function render01(root, data) {
     } else {
       if (mismatchSection) mismatchSection.classList.remove('hidden');
       mismatchBody.innerHTML = mismatches
-        .map((m) => `<tr><td>${esc(m.file_name || '')}</td><td><span class="status-badge mismatch">Mismatch</span> <code>${esc(JSON.stringify(m.file_mismatches || {}))}</code></td></tr>`)
+        .map((m) => `<tr><td>${esc(m.file_name ?? '')}</td><td><span class="status-badge mismatch">Mismatch</span> <code>${esc(JSON.stringify(m.file_mismatches ?? {}))}</code></td></tr>`)
         .join('');
     }
   }
@@ -153,7 +165,7 @@ function renderProfileTab(root, data, mode) {
 
   function draw() {
     const c = cols[idx] || {};
-    if (chartTitle) chartTitle.textContent = `Distribution - ${c.column_name || ''}`;
+    if (chartTitle) chartTitle.textContent = `Distribution - ${displayLabel(c.column_name || '')}`;
     if (valueHeader) valueHeader.textContent = profileValueHeader(c, rangeCols);
 
     if (tabs) {
@@ -202,7 +214,7 @@ function renderProfileTab(root, data, mode) {
 
 // ===== JS riêng EDA 04 =====
 function render04(root, raw) {
-  const list = Array.isArray(raw) ? raw : [];
+  const list = Array.isArray(raw) ? raw : (raw.checks || []);
   const check1 = list.find((x) => x.check === 1) || {};
   const check2 = list.find((x) => x.check === 2) || {};
   const check3 = list.find((x) => x.check === 3) || {};
@@ -218,9 +230,9 @@ function render04(root, raw) {
   const check3Desc = q(root, 'check3Desc');
   const check2RowCount = q(root, 'check2RowCount');
   const check3RowCount = q(root, 'check3RowCount');
-  if (check1Desc) check1Desc.textContent = check1.description || '';
-  if (check2Desc) check2Desc.textContent = check2.description || '';
-  if (check3Desc) check3Desc.textContent = check3.description || '';
+  if (check1Desc) check1Desc.textContent = check1.description === null ? 'null' : (check1.description ?? '');
+  if (check2Desc) check2Desc.textContent = check2.description === null ? 'null' : (check2.description ?? '');
+  if (check3Desc) check3Desc.textContent = check3.description === null ? 'null' : (check3.description ?? '');
   if (kTotal) {
     const c1Total = c1.reduce((acc, r) => acc + Number(r.total_count || 0), 0);
     const currentStepsData = D.dashboardData[D.getCurrentDomain()] || {};
@@ -266,9 +278,9 @@ function render05(root, data) {
   if (kpis) {
     kpis.classList.add('kpis-inline', 'kpis-eda01-style');
     const rows = [
-      ['raw_row_count', summary.raw_row_count ?? summary.total_input_rows],
-      ['clean_row_count', summary.clean_row_count ?? summary.total_clean_rows],
-      ['removed_row_count', summary.removed_row_count ?? summary.total_removed_rows],
+      ['raw_count', summary.raw_count ?? summary.raw_row_count ?? summary.total_input_rows],
+      ['clean_count', summary.clean_count ?? summary.clean_row_count ?? summary.total_clean_rows],
+      ['removed_count', summary.removed_count ?? summary.removed_row_count ?? summary.total_removed_rows],
       ['removed_percentage', summary.removed_percentage ?? summary.total_removed_percent],
     ];
     kpis.innerHTML = rows.map(([k, v]) => kvRowHtml(k, v)).join('');
@@ -278,12 +290,29 @@ function render05(root, data) {
   const prevBtn = q(root, 'prevBtn');
   const nextBtn = q(root, 'nextBtn');
   const pageInfo = q(root, 'pageInfo');
+  const rulesHead = q(root, 'rulesHead');
   const rulesBody = q(root, 'rulesBody');
   const svg = q(root, 'chart');
   const ruleRemovedCount = (r) =>
-    Number(r.exclusive_removed_row_count ?? r.removed_exclusive_rows ?? 0)
-    + Number(r.shared_removed_row_count ?? r.removed_shared_rows ?? 0);
+    Number(r.exclusive_removed_count ?? r.exclusive_removed_row_count ?? r.removed_exclusive_rows ?? 0)
+    + Number(r.shared_removed_count ?? r.shared_removed_row_count ?? r.removed_shared_rows ?? 0);
   const sortedRules = [...rules].sort((a, b) => ruleRemovedCount(b) - ruleRemovedCount(a));
+
+  if (rulesHead) {
+    const headers = data.rules_headers || [
+      'column_name',
+      'rule_name',
+      'invalid_count',
+      'exclusive_removed_count',
+      'shared_removed_count',
+      'invalid_percentage',
+      'exclusive_removed_percentage',
+      'shared_removed_percentage',
+    ];
+    rulesHead.innerHTML = headers
+      .map((header) => `<th>${esc(displayLabel(header))}</th>`)
+      .join('');
+  }
 
   function drawPage() {
     const totalPages = Math.max(1, Math.ceil(rules.length / pageSize));
@@ -299,14 +328,14 @@ function render05(root, data) {
         rulesBody,
         items,
         (r) =>
-          `<tr><td><code>${esc(r.rule_name)}</code></td><td><code>${esc(r.column_name)}</code></td><td>${fmtInt(r.invalid_row_count)}</td><td>${fmtInt(r.exclusive_removed_row_count)}</td><td>${fmtInt(r.shared_removed_row_count)}</td><td>${fmtPct(r.invalid_row_percentage)}</td><td>${fmtPct(r.exclusive_removed_percentage)}</td><td>${fmtPct(r.shared_removed_percentage)}</td></tr>`,
+          `<tr><td><code>${esc(r.rule_name)}</code></td><td><code>${esc(r.column_name)}</code></td><td>${fmtInt(r.invalid_count ?? r.invalid_row_count)}</td><td>${fmtInt(r.exclusive_removed_count ?? r.exclusive_removed_row_count)}</td><td>${fmtInt(r.shared_removed_count ?? r.shared_removed_row_count)}</td><td>${fmtPct(r.invalid_percentage ?? r.invalid_row_percentage)}</td><td>${fmtPct(r.exclusive_removed_percentage)}</td><td>${fmtPct(r.shared_removed_percentage)}</td></tr>`,
       );
     }
 
     const chartRows = items.map((r) => ({
       label: r.column_name || r.rule_name,
-      exclusive: Number(r.exclusive_removed_row_count ?? r.removed_exclusive_rows ?? 0),
-      shared: Number(r.shared_removed_row_count ?? r.removed_shared_rows ?? 0),
+      exclusive: Number(r.exclusive_removed_count ?? r.exclusive_removed_row_count ?? r.removed_exclusive_rows ?? 0),
+      shared: Number(r.shared_removed_count ?? r.shared_removed_row_count ?? r.removed_shared_rows ?? 0),
       total: ruleRemovedCount(r),
       exclusivePercent: Number(r.exclusive_removed_percentage ?? 0),
       sharedPercent: Number(r.shared_removed_percentage ?? 0),
@@ -662,121 +691,6 @@ function drawFeatureCategoryBars(svg, rows, metric) {
   });
 }
 
-function renderFeatureCategoryMetrics(root, data, mode) {
-  const count = Number(data.row_count || 0);
-  const rows = Array.from({ length: count }, (_, index) => {
-    const dayType = data.day_type?.[index];
-    const rainStatus = data.rain_status?.[index];
-    const rainLevel = data.rain_level?.[index];
-    return {
-      day_type: dayType,
-      rain_status: rainStatus,
-      rain_level: rainLevel,
-      label: mode === 'day_type_rain_status'
-        ? `${dayType}/${rainStatus}`
-        : mode === 'rain_level'
-          ? rainLevel
-          : rainStatus,
-      day_count: data.day_count?.[index],
-      avg_trip_count: data.avg_trip_count?.[index],
-      avg_duration_minutes: data.avg_duration_minutes?.[index],
-      avg_trip_distance: data.avg_trip_distance?.[index],
-      avg_fare_amount: data.avg_fare_amount?.[index],
-      avg_tip_amount: data.avg_tip_amount?.[index],
-      avg_total_amount: data.avg_total_amount?.[index],
-    };
-  });
-  const metrics = [
-    'avg_trip_count',
-    'avg_duration_minutes',
-    'avg_trip_distance',
-    'avg_fare_amount',
-    'avg_tip_amount',
-    'avg_total_amount',
-  ];
-  const tabs = root.querySelector('.js-tabs');
-  const chart = q(root, 'chart');
-  const chartTitle = q(root, 'chartTitle');
-  const head = q(root, 'featureCategoryHead');
-  const body = q(root, 'featureCategoryBody');
-  let activeMetric = metrics[0];
-
-  const diffPct = (row) => {
-    let baseline;
-    if (mode === 'day_type_rain_status') {
-      baseline = rows.find((item) => item.day_type === row.day_type && item.rain_status === 'no_rain');
-    } else if (mode === 'rain_level') {
-      baseline = rows.find((item) => item.rain_level === 'no_rain');
-    } else {
-      baseline = rows.find((item) => item.rain_status === 'no_rain');
-    }
-    const baseValue = Number(baseline?.[activeMetric]);
-    const value = Number(row[activeMetric]);
-    if (!Number.isFinite(baseValue) || Math.abs(baseValue) < 1e-12 || !Number.isFinite(value)) return null;
-    return ((value - baseValue) / baseValue) * 100;
-  };
-
-  function draw() {
-    renderInnerTabs(tabs, metrics.map((metric) => ({ column_name: metric })), metrics.indexOf(activeMetric), (idx) => {
-      activeMetric = metrics[idx];
-      draw();
-    });
-    if (chartTitle) chartTitle.textContent = `${activeMetric} comparison`;
-    drawFeatureCategoryBars(chart, rows, activeMetric);
-
-    const leadingHeaders = mode === 'day_type_rain_status'
-      ? ['day_type', 'rain_status']
-      : mode === 'rain_level'
-        ? ['rain_level']
-        : ['rain_status'];
-    if (head) {
-      head.innerHTML = [
-        ...leadingHeaders,
-        'day_count',
-        activeMetric,
-        'diff_from_baseline',
-      ].map((header) => `<th>${esc(header)}</th>`).join('');
-    }
-    renderRows(body, rows, (row) => `
-      <tr>
-        ${mode === 'day_type_rain_status' ? `<td>${esc(row.day_type)}</td>` : ''}
-        <td>${esc(mode === 'rain_level' ? row.rain_level : row.rain_status)}</td>
-        <td>${fmtInt(row.day_count)}</td>
-        <td>${activeMetric === 'avg_trip_count' ? fmtInt(row[activeMetric]) : esc(row[activeMetric])}</td>
-        <td>${diffPct(row) === null ? '' : fmtPct(diffPct(row))}</td>
-      </tr>
-    `);
-  }
-
-  draw();
-}
-
-function renderFeature06(root, data) {
-  const body = q(root, 'feature06Body');
-  const metrics = data.metric || [];
-  const rows = metrics.map((metric, index) => ({
-    metric,
-    rain_pct: data.rain_pct?.[index],
-    weekday_rain_pct: data.weekday_rain_pct?.[index],
-    weekend_rain_pct: data.weekend_rain_pct?.[index],
-    light_rain_pct: data.light_rain_pct?.[index],
-    medium_rain_pct: data.medium_rain_pct?.[index],
-    heavy_rain_pct: data.heavy_rain_pct?.[index],
-  }));
-  const pctCell = (value) => (value === null || value === undefined ? '' : fmtPct(value));
-  renderRows(body, rows, (row) => `
-    <tr>
-      <td><code>${esc(row.metric)}</code></td>
-      <td>${pctCell(row.rain_pct)}</td>
-      <td>${pctCell(row.weekday_rain_pct)}</td>
-      <td>${pctCell(row.weekend_rain_pct)}</td>
-      <td>${pctCell(row.light_rain_pct)}</td>
-      <td>${pctCell(row.medium_rain_pct)}</td>
-      <td>${pctCell(row.heavy_rain_pct)}</td>
-    </tr>
-  `);
-}
-
 function buildFeatureCategoryRows(data, mode) {
   const count = Number(data.row_count || 0);
   return Array.from({ length: count }, (_, index) => {
@@ -848,12 +762,12 @@ function renderFeatureCategoryPanel(root, sectionData, mode, ids, activeMetric, 
         ? ['weather_level', 'value_range']
         : ['rain_status'];
   if (head) {
-    head.innerHTML = [
-      ...leadingHeaders,
-      'day_count',
-      activeMetric,
-      'diff_from_baseline',
-    ].map((header) => `<th>${esc(header)}</th>`).join('');
+      head.innerHTML = [
+        ...leadingHeaders,
+        'day_count',
+        activeMetric,
+        'diff_from_baseline',
+      ].map((header) => `<th>${esc(displayLabel(header))}</th>`).join('');
   }
   renderRows(body, rows, (row) => `
     <tr>
@@ -983,8 +897,6 @@ const STEP_RENDERERS = {
     render07,
     renderFeature02,
     renderFeature03Combined,
-    renderFeatureCategoryMetrics,
-    renderFeature06,
     STEP_RENDERERS,
   });
 })(window.Dashboard = window.Dashboard || {});

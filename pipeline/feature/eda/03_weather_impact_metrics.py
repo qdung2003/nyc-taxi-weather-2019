@@ -342,18 +342,8 @@ def main(conn):
     reset_csv_dir(output_file)
     write_metadata_csv(
         output_file,
-        {
-            "weather_column_count": len(WEATHER_COLUMNS),
-            "metric_count": len(METRICS),
-        },
-    )
-    write_csv(
-        output_file / "weather_columns.csv",
-        [{"column_name": column_name} for column_name in WEATHER_COLUMNS],
-    )
-    write_csv(
-        output_file / "metrics.csv",
-        [{"metric": metric} for metric in METRICS],
+        keys=["weather_column_count", "metric_count"],
+        values=[len(WEATHER_COLUMNS), len(METRICS)],
     )
     write_csv(output_file / "rain_status.csv", rain_status)
     write_csv(output_file / "rain_weekend.csv", rain_weekend)

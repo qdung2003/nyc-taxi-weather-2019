@@ -67,7 +67,11 @@ def main(conn):
         )
 
     reset_csv_dir(output_file)
-    write_metadata_csv(output_file, {"group_by": "date", "row_count": len(rows)})
+    write_metadata_csv(
+        output_file,
+        keys=["group_by", "row_count"],
+        values=["date", len(rows)],
+    )
     write_csv(
         output_file / "daily_weather_metrics.csv",
         daily_rows,

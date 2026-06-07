@@ -83,11 +83,16 @@ def main(conn):
     reset_csv_dir(output_file)
     write_metadata_csv(
         output_file,
-        {
-            "row_count": row_count,
-            "low_unique_column_count": len(low_unique_columns),
-            "high_unique_column_count": len(high_unique_columns),
-        },
+        keys=[
+            "row_count",
+            "low_unique_column_count",
+            "high_unique_column_count",
+        ],
+        values=[
+            row_count,
+            len(low_unique_columns),
+            len(high_unique_columns),
+        ],
     )
     write_low_unique_csvs(output_file, low_unique_columns)
     write_high_unique_csvs(output_file, high_unique_columns)

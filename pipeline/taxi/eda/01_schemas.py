@@ -75,13 +75,20 @@ def main(conn):
     reset_csv_dir(output_file)
     write_metadata_csv(
         output_file,
-        {
-            "files_directory": TAXI_RAW_TEMP_DIR.as_posix(),
-            "file_count": len(link_parquet_files),
-            "reference_file": reference_parquet_file,
-            "column_count": len(column_names),
-            "all_match": all_match,
-        },
+        keys=[
+            "files_directory",
+            "file_count",
+            "reference_file",
+            "column_count",
+            "all_match",
+        ],
+        values=[
+            TAXI_RAW_TEMP_DIR.as_posix(),
+            len(link_parquet_files),
+            reference_parquet_file,
+            len(column_names),
+            all_match,
+        ],
     )
     write_csv(
         output_file / "files.csv",

@@ -9,9 +9,10 @@ function fmtPct(n) {
   return `${rounded.toFixed(2).replace(/\.?0+$/, '')}%`;
 }
 const esc = (v) =>
-  String(v ?? '').replace(/[&<>"']/g, (c) => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[c]));
+  String(v === null ? 'null' : (v ?? '')).replace(/[&<>"']/g, (c) => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[c]));
+const displayLabel = (v) => String(v === null ? 'null' : (v ?? '')).replace(/_/g, ' ');
 const formatKpiValue = (k, v) => (/(percentage|percent|_pct)$/i.test(String(k)) ? fmtPct(v) : v);
-const kvRowHtml = (k, v) => `<div class="k01-meta-row"><span class="kv-key">${esc(k)}:</span><span class="kv-value">${esc(formatKpiValue(k, v))}</span></div>`;
+const kvRowHtml = (k, v) => `<div class="k01-meta-row"><span class="kv-key">${esc(displayLabel(k))}:</span><span class="kv-value">${esc(formatKpiValue(k, v))}</span></div>`;
 const shortText = (v, max = 34) => {
   const text = String(v ?? '');
   return text.length > max ? `${text.slice(0, max - 1)}…` : text;
@@ -65,7 +66,7 @@ function renderInnerTabs(tabsEl, items, activeIndex, onPick) {
     const tab = document.createElement('button');
     tab.className = `tab ${i === activeIndex ? 'active' : ''}`;
     tab.type = 'button';
-    tab.textContent = item.column_name || item.label || `col_${i + 1}`;
+    tab.textContent = displayLabel(item.column_name || item.label || `col_${i + 1}`);
     tab.setAttribute('aria-pressed', i === activeIndex ? 'true' : 'false');
     tab.onclick = () => onPick(i);
     tab.onkeydown = (e) => {
@@ -121,7 +122,7 @@ function renderScalarChips(chips, item) {
   chips.classList.remove('chips-balanced');
   chips.innerHTML = entries
     .map(([key, value], index) => (
-      `${index === firstRowCount && entries.length > 2 ? '<span class="chip-break"></span>' : ''}<span class="chip">${esc(key)}: ${esc(formatKpiValue(key, value))}</span>`
+      `${index === firstRowCount && entries.length > 2 ? '<span class="chip-break"></span>' : ''}<span class="chip">${esc(displayLabel(key))}: ${esc(formatKpiValue(key, value))}</span>`
     ))
     .join('');
   balanceFlexRows(chips, '.chip', 'chip-break');
@@ -143,9 +144,9 @@ function renderPrimitiveKpis(root, data, step) {
   ));
   if (!primitiveEntries.length) return;
   const preferredByStep = {
-    '02': ['warehouse_db_path', 'raw_table', 'row_count', 'max_unique_values', 'low_unique_column_count'],
+    '02': ['warehouse_database_path', 'warehouse_db_path', 'table', 'raw_table', 'row_count', 'max_unique_values', 'low_unique_column_count', 'high_unique_column_count'],
     '03': ['tail_ratio', 'positive_bin_count', 'high_unique_column_count'],
-    '05': ['raw_row_count', 'clean_row_count', 'removed_row_count', 'removed_percentage'],
+    '05': ['raw_count', 'clean_count', 'removed_count', 'removed_percentage', 'rule_count'],
     '06': ['row_count', 'low_unique_column_count', 'high_unique_column_count'],
     '07': ['first_pass_bin_count', 'second_pass_bin_count', 'first_pass_threshold_percent', 'second_pass_threshold_percent', 'column_count'],
     '08': ['row_count', 'low_unique_column_count', 'high_unique_column_count'],
@@ -403,6 +404,7 @@ function buildRangeChartRows(rows, col, totalRows) {
     fmtInt,
     fmtPct,
     esc,
+    displayLabel,
     formatKpiValue,
     kvRowHtml,
     shortText,
