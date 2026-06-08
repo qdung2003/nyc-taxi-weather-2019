@@ -6,10 +6,12 @@ import importlib
 import inspect
 import re
 from concurrent.futures import ThreadPoolExecutor
+from contextlib import contextmanager
 from pathlib import Path
 from typing import Iterable
 
 from pipeline.constants.paths import PIPELINE_DIR, PROJECT_ROOT
+from pipeline.services.connect import DuckDBConnectionManager
 
 
 DOMAINS = {"taxi", "weather", "feature"}
@@ -100,10 +102,14 @@ def module_name_for_script(domain: str, stage: str, script: Path) -> str:
 
 
 # ===== Execution =====
-def get_connection_manager_cls():
-    from pipeline.services.connect import DuckDBConnectionManager
-
-    return DuckDBConnectionManager
+@contextmanager
+def managed_connection():
+    manager = DuckDBConnectionManager()
+    try:
+        with manager.get_connection() as conn:
+            yield conn
+    finally:
+        manager.close()
 
 
 def script_label(domain: str, stage: str) -> str:
@@ -135,13 +141,9 @@ def run_script_with_conn_if_needed(domain: str, stage: str, script: Path, shared
             main_fn(shared_conn)
             return
 
-        manager = get_connection_manager_cls()()
-        try:
-            with manager.get_connection() as conn:
-                print(f"\n{label} >>> Running (with managed conn): {relative_script_path(script)}")
-                main_fn(conn)
-        finally:
-            manager.close()
+        with managed_connection() as conn:
+            print(f"\n{label} >>> Running (with managed conn): {relative_script_path(script)}")
+            main_fn(conn)
     except SystemExit as exc:
         if exc.code != 0:
             print(f"\nERROR (SystemExit) in {label} {script.name}: code {exc.code}")
@@ -163,12 +165,8 @@ def handle_only(parts: list[str]) -> None:
         run_scripts(domain, stage, scripts)
         return
 
-    manager = get_connection_manager_cls()()
-    try:
-        with manager.get_connection() as conn:
-            run_scripts(domain, stage, scripts, shared_conn=conn)
-    finally:
-        manager.close()
+    with managed_connection() as conn:
+        run_scripts(domain, stage, scripts, shared_conn=conn)
 
 
 def handle_list(parts: list[str], shared_conn=None) -> None:
@@ -187,12 +185,8 @@ def handle_list(parts: list[str], shared_conn=None) -> None:
         run_scripts(domain, stage, scripts, shared_conn=shared_conn)
         return
 
-    manager = get_connection_manager_cls()()
-    try:
-        with manager.get_connection() as conn:
-            run_scripts(domain, stage, scripts, shared_conn=conn)
-    finally:
-        manager.close()
+    with managed_connection() as conn:
+        run_scripts(domain, stage, scripts, shared_conn=conn)
 
 
 def run_domain_pipeline(domain: str, shared_conn) -> None:
@@ -204,24 +198,17 @@ def run_domain_pipeline(domain: str, shared_conn) -> None:
 
 
 def handle_domain(domain: str) -> None:
-    manager = get_connection_manager_cls()()
-    try:
-        with manager.get_connection() as conn:
-            run_domain_pipeline(domain, conn)
-    finally:
-        manager.close()
+    with managed_connection() as conn:
+        run_domain_pipeline(domain, conn)
 
 
 def handle_all() -> None:
     print("Executing ALL flows: Taxi & Weather first, then Feature...")
-    manager = get_connection_manager_cls()()
-    try:
-        with manager.get_connection() as shared_conn:
-            with ThreadPoolExecutor(max_workers=2) as executor:
-                list(executor.map(lambda domain: run_domain_pipeline(domain, shared_conn), ["taxi", "weather"]))
-            run_domain_pipeline("feature", shared_conn)
-    finally:
-        manager.close()
+    with ThreadPoolExecutor(max_workers=2) as executor:
+        futures = [executor.submit(handle_domain, domain) for domain in ("taxi", "weather")]
+        for future in futures:
+            future.result()
+    handle_domain("feature")
 
 
 def handle_dashboard() -> None:

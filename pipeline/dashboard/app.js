@@ -1,4 +1,4 @@
-﻿(function (D) {
+(function (D) {
   const nav = document.getElementById('nav');
   const content = document.getElementById('content');
   if (!nav || !content) return;
@@ -11,6 +11,8 @@
     getCurrentDomain,
     profileTemplate,
     rulesTemplate,
+    feature02Template,
+    feature03Template,
     STEP_TEMPLATES,
     STEP_RENDERERS,
     render05,
@@ -23,102 +25,37 @@
   const stepRoot = content;
   nav.classList.add('nav-root');
   const stepCache = Object.fromEntries(domains.map((domain) => [domain, getAvailableSteps(domain)]));
+  const SPECIAL_STEPS = {
+    'feature:01': {
+      template: () => profileTemplate('EDA 01: profile features'),
+      renderer: (root, data) => renderProfileTab(root, data, '06'),
+    },
+    'feature:02': {
+      template: feature02Template,
+      renderer: renderFeature02,
+    },
+    'feature:03': {
+      template: feature03Template,
+      renderer: renderFeature03Combined,
+    },
+    'weather:04': {
+      template: () => rulesTemplate('EDA 04: before business rules'),
+      renderer: render05,
+    },
+    'weather:05': {
+      template: () => profileTemplate('EDA 05: after business rules'),
+      renderer: (root, data) => renderProfileTab(root, data, '06'),
+    },
+  };
 
   function getStepTemplate(domain, step) {
-    if (domain === 'feature' && step === '01') return profileTemplate('EDA 01: profile features');
-    if (domain === 'feature' && step === '02') return `
-      <div class="card">
-        <h1>EDA 02: daily weather metrics</h1>
-        <div class="profile-top">
-          <div class="kpis meta-common"></div>
-          <div class="tabbar js-tabs"></div>
-        </div>
-      </div>
-      <div class="card section">
-        <div class="subhead" id="chartTitle">Daily metric</div>
-        <svg id="chart" class="chart-frame" viewBox="0 0 1040 300" preserveAspectRatio="xMidYMid meet"></svg>
-        <table class="feature02-table">
-          <thead>
-            <tr id="feature02Head">
-              <th>date</th>
-            </tr>
-          </thead>
-          <tbody id="feature02Body"></tbody>
-        </table>
-      </div>
-    `;
-    if (domain === 'feature' && step === '03') return `
-      <div class="card">
-        <h1>EDA 03: weather impact metrics</h1>
-        <div class="profile-top">
-          <div class="kpis meta-common"></div>
-        </div>
-        <div class="feature03-control-row">
-          <div class="subhead">Select weather column:</div>
-          <div class="tabbar" id="feature03WeatherTabs"></div>
-        </div>
-        <div class="feature03-control-row">
-          <div class="subhead">Select taxi metric:</div>
-          <div class="tabbar" id="feature03MetricTabs"></div>
-        </div>
-      </div>
-      <div class="card section" id="rainStatusSection">
-        <h2>Rain vs No Rain</h2>
-        <div class="subhead" id="rainStatusTitle">Metric comparison</div>
-        <svg id="rainStatusChart" class="chart-frame" viewBox="0 0 1040 300" preserveAspectRatio="xMidYMid meet"></svg>
-        <table class="feature-category-table">
-          <thead><tr id="rainStatusHead"></tr></thead>
-          <tbody id="rainStatusBody"></tbody>
-        </table>
-      </div>
-      <div class="card section" id="rainWeekendSection">
-        <h2>Rain by Weekday/Weekend</h2>
-        <div class="subhead" id="rainWeekendTitle">Metric comparison</div>
-        <svg id="rainWeekendChart" class="chart-frame" viewBox="0 0 1040 300" preserveAspectRatio="xMidYMid meet"></svg>
-        <table class="feature-category-table">
-          <thead><tr id="rainWeekendHead"></tr></thead>
-          <tbody id="rainWeekendBody"></tbody>
-        </table>
-      </div>
-      <div class="card section" id="weatherLevelSection">
-        <h2 id="weatherLevelHeading">Rain Levels</h2>
-        <div class="subhead" id="rainLevelTitle">Metric comparison</div>
-        <svg id="rainLevelChart" class="chart-frame" viewBox="0 0 1040 300" preserveAspectRatio="xMidYMid meet"></svg>
-        <table class="feature-category-table">
-          <thead><tr id="rainLevelHead"></tr></thead>
-          <tbody id="rainLevelBody"></tbody>
-        </table>
-      </div>
-      <div class="card section" id="feature03SummarySection">
-        <h2>Impact Summary</h2>
-        <table class="feature-summary-table">
-          <thead>
-            <tr>
-              <th>metric</th>
-              <th>rain_pct</th>
-              <th>weekday_rain_pct</th>
-              <th>weekend_rain_pct</th>
-              <th>light_rain_pct</th>
-              <th>medium_rain_pct</th>
-              <th>heavy_rain_pct</th>
-            </tr>
-          </thead>
-          <tbody id="feature03SummaryBody"></tbody>
-        </table>
-      </div>
-    `;
-    if (domain === 'weather' && step === '04') return rulesTemplate('EDA 04: before business rules');
-    if (domain === 'weather' && step === '05') return profileTemplate('EDA 05: after business rules');
+    const special = SPECIAL_STEPS[`${domain}:${step}`];
+    if (special?.template) return special.template();
     return STEP_TEMPLATES[step] || '';
   }
 
   function getStepRenderer(domain, step) {
-    if (domain === 'feature' && step === '01') return (root, data) => renderProfileTab(root, data, '06');
-    if (domain === 'feature' && step === '02') return renderFeature02;
-    if (domain === 'feature' && step === '03') return renderFeature03Combined;
-    if (domain === 'weather' && step === '04') return render05;
-    if (domain === 'weather' && step === '05') return (root, data) => renderProfileTab(root, data, '06');
-    return STEP_RENDERERS[step];
+    return SPECIAL_STEPS[`${domain}:${step}`]?.renderer || STEP_RENDERERS[step];
   }
 
   function showStep(domain, step) {

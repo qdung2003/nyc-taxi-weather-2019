@@ -1,4 +1,4 @@
-﻿import pyarrow.csv as pv
+import pyarrow.csv as pv
 
 from pipeline.constants.modules import WEATHER01_DOWNLOAD, WEATHER02_INGEST
 from pipeline.constants.paths import WEATHER_EDA_RESULTS_DIR

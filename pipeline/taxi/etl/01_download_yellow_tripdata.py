@@ -1,4 +1,4 @@
-﻿import requests
+import requests
 from tqdm import tqdm
 from pipeline.constants.paths import TAXI_RAW_TEMP_DIR, TAXI_RAW_URL
 from pipeline.constants.times import MONTHS, YEAR

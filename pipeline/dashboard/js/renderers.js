@@ -1,4 +1,4 @@
-﻿(function (D) {
+(function (D) {
   const {
     q,
     esc,
@@ -6,7 +6,6 @@
     fmtInt,
     fmtPct,
     kvRowHtml,
-    mk,
     balanceFlexRows,
     renderInnerTabs,
     renderScalarChips,
@@ -17,9 +16,96 @@
     prependRangeSummaryRows,
     drawBars,
     drawStackedBars,
+    drawFeatureMetricLine,
+    drawFeatureCategoryBars,
     byPercentDesc,
     renderRows,
   } = D;
+  const DEFAULT_RANGE_COLUMNS = ['fare_amount', 'tip_amount', 'tolls_amount', 'total_amount', 'trip_distance'];
+  const EDA04_CHART_OPTIONS = {
+    w: 1080,
+    h: 320,
+    maxBarWidth: 53,
+    noTruncateLabels: true,
+    margin: { top: 22, right: 24, bottom: 44, left: 72 },
+  };
+  const FEATURE02_METRICS = [
+    'trip_count',
+    'prcp',
+    'avg_temp',
+    'temp_range',
+    'avg_duration_minutes',
+    'avg_trip_distance',
+    'avg_fare_amount',
+    'avg_tip_amount',
+    'avg_total_amount',
+  ];
+  const FEATURE03_METRICS = [
+    'avg_trip_count',
+    'avg_duration_minutes',
+    'avg_trip_distance',
+    'avg_fare_amount',
+    'avg_tip_amount',
+    'avg_total_amount',
+  ];
+  const FEATURE03_WEATHER_COLUMNS = ['prcp', 'avg_temp', 'temp_range'];
+
+  function renderHeadRow(head, headers) {
+    if (!head) return;
+    head.innerHTML = headers.map((header) => `<th>${esc(displayLabel(header))}</th>`).join('');
+  }
+
+  function renderKpiRows(container, rows, classNames = []) {
+    if (!container) return;
+    container.classList.add(...classNames);
+    container.innerHTML = rows.map(([key, value]) => kvRowHtml(key, value)).join('');
+    balanceFlexRows(container, '.k01-meta-row', 'kpi-break');
+  }
+
+  function renderText(target, value) {
+    if (!target) return;
+    target.textContent = value === null ? 'null' : (value ?? '');
+  }
+
+  function getFeature02Rows(data) {
+    if (Array.isArray(data.rows)) return data.rows;
+    const dates = data.date || [];
+    const prcp = data.prcp || [];
+    const avgTemp = data.avg_temp || [];
+    const tempRange = data.temp_range || [];
+    const tripCount = data.trip_count || [];
+    const avgDuration = data.avg_duration_minutes || [];
+    const avgDistance = data.avg_trip_distance || [];
+    const avgFare = data.avg_fare_amount || [];
+    const avgTip = data.avg_tip_amount || [];
+    const avgTotal = data.avg_total_amount || [];
+    return dates.map((value, index) => ({
+      date: value,
+      prcp: prcp[index],
+      avg_temp: avgTemp[index],
+      temp_range: tempRange[index],
+      trip_count: tripCount[index],
+      avg_duration_minutes: avgDuration[index],
+      avg_trip_distance: avgDistance[index],
+      avg_fare_amount: avgFare[index],
+      avg_tip_amount: avgTip[index],
+      avg_total_amount: avgTotal[index],
+    }));
+  }
+
+  function getFeatureCategoryValue(row, mode) {
+    if (mode === 'rain_level') return row.rain_level;
+    if (mode === 'weather_level') return row.weather_level;
+    return row.rain_status;
+  }
+
+  function getFeatureCategoryHeaders(mode) {
+    if (mode === 'day_type_rain_status') return ['day_type', 'rain_status'];
+    if (mode === 'rain_level') return ['rain_level', 'value_range'];
+    if (mode === 'weather_level') return ['weather_level', 'value_range'];
+    return ['rain_status'];
+  }
+
 function render01(root, data) {
   const kpis = root.querySelector('.kpis');
   const filesToggle = q(root, 'k01FilesToggle');
@@ -30,12 +116,10 @@ function render01(root, data) {
   const schemaBody = q(root, 'k01SchemaBody');
   const mismatchBody = q(root, 'k01MismatchBody');
   if (kpis) {
-    kpis.classList.add('kpis-inline');
     const rows = Object.entries(data).filter(([, value]) => (
       value === null || ['string', 'number', 'boolean'].includes(typeof value)
     ));
-    kpis.innerHTML = rows.map(([k, v]) => kvRowHtml(k, v)).join('');
-    balanceFlexRows(kpis, '.k01-meta-row', 'kpi-break');
+    renderKpiRows(kpis, rows, ['kpis-inline']);
   }
 
   if (filesList && filesBody) {
@@ -44,6 +128,7 @@ function render01(root, data) {
       index: row.index ?? idx + 1,
       file: row.file ?? row.file_name ?? '',
     }));
+    const fileCount = files.length;
     const fileTable = filesBody.closest('table');
     const filesWrap = filesList.closest('.eda01-files');
     if (!files.length && filesWrap) filesWrap.classList.add('hidden');
@@ -64,13 +149,13 @@ function render01(root, data) {
         fileTable.style.setProperty('--file-cols', String(cols));
         fileTable.style.setProperty('--file-index-total', `${cols * 52}px`);
       }
-        if (filesHead) {
-          const headerPair = [
-            `<th>${esc(displayLabel(fileHeaders[0] ?? 'index'))}</th>`,
-            `<th>${esc(displayLabel(fileHeaders[1] ?? 'file'))}</th>`,
-          ].join('');
-          filesHead.innerHTML = `<tr>${Array.from({ length: cols }, () => headerPair).join('')}</tr>`;
-        }
+      if (filesHead) {
+        const headerPair = [
+          `<th>${esc(displayLabel(fileHeaders[0] ?? 'index'))}</th>`,
+          `<th>${esc(displayLabel(fileHeaders[1] ?? 'file'))}</th>`,
+        ].join('');
+        filesHead.innerHTML = `<tr>${Array.from({ length: cols }, () => headerPair).join('')}</tr>`;
+      }
       filesBody.innerHTML = Array.from({ length: rowsPerCol }, (_, r) => {
         const cells = columns.map((col) => col[r]);
         const tds = cells.map((cell) => (
@@ -83,7 +168,7 @@ function render01(root, data) {
     };
     renderFileList();
     filesList.classList.add('hidden');
-    if (filesToggle) filesToggle.textContent = `Show file list (${files.length})`;
+    if (filesToggle) filesToggle.textContent = `Show file list (${fileCount})`;
     const onResize = () => {
       if (!filesList.classList.contains('hidden')) renderFileList();
     };
@@ -101,16 +186,14 @@ function render01(root, data) {
         window.removeEventListener('resize', filesList._onResize);
       }
       filesToggle.textContent = isHidden
-        ? `Show file list (${(data.files || []).length})`
-        : `Hide file list (${(data.files || []).length})`;
+        ? `Show file list (${fileCount})`
+        : `Hide file list (${fileCount})`;
     };
   }
 
   if (schemaBody) {
     const schemaHeaders = data.schema_headers || ['column name', 'parquet type', 'database type', 'match'];
-    if (schemaHead) {
-      schemaHead.innerHTML = schemaHeaders.map((header) => `<th>${esc(displayLabel(header))}</th>`).join('');
-    }
+    renderHeadRow(schemaHead, schemaHeaders);
     const schemaRows = data.schema_rows || [];
     schemaBody.innerHTML = schemaRows
       .map((row) => {
@@ -161,7 +244,7 @@ function renderProfileTab(root, data, mode) {
 
   let idx = 0;
 
-  const rangeCols = new Set(data.range_columns || ['fare_amount', 'tip_amount', 'tolls_amount', 'total_amount', 'trip_distance']);
+  const rangeCols = new Set(data.range_columns || DEFAULT_RANGE_COLUMNS);
 
   function draw() {
     const c = cols[idx] || {};
@@ -230,9 +313,9 @@ function render04(root, raw) {
   const check3Desc = q(root, 'check3Desc');
   const check2RowCount = q(root, 'check2RowCount');
   const check3RowCount = q(root, 'check3RowCount');
-  if (check1Desc) check1Desc.textContent = check1.description === null ? 'null' : (check1.description ?? '');
-  if (check2Desc) check2Desc.textContent = check2.description === null ? 'null' : (check2.description ?? '');
-  if (check3Desc) check3Desc.textContent = check3.description === null ? 'null' : (check3.description ?? '');
+  renderText(check1Desc, check1.description);
+  renderText(check2Desc, check2.description);
+  renderText(check3Desc, check3.description);
   if (kTotal) {
     const c1Total = c1.reduce((acc, r) => acc + Number(r.total_count || 0), 0);
     const currentStepsData = D.dashboardData[D.getCurrentDomain()] || {};
@@ -249,15 +332,14 @@ function render04(root, raw) {
   if (kPt3) kPt3.textContent = fmtInt(rows2.length ? Math.round((rows2[0].rows * 100) / Math.max(rows2[0].percent, 0.00001)) : 0);
   if (kPt4) kPt4.textContent = fmtInt(rows3.length ? Math.round((rows3[0].rows * 100) / Math.max(rows3[0].percent, 0.00001)) : 0);
 
-  const eda04ChartOptions = { w: 1080, h: 320, maxBarWidth: 53, noTruncateLabels: true, margin: { top: 22, right: 24, bottom: 44, left: 72 } };
   const chartRows1 = rows1.map((r) => ({ label: r.label, y: r.percent, percent: r.percent }));
   const sortedRows2 = [...rows2].sort(byPercentDesc);
   const sortedRows3 = [...rows3].sort(byPercentDesc);
   const chartRows2 = sortedRows2.map((r) => ({ label: r.label, y: r.rows, percent: r.percent }));
   const chartRows3 = sortedRows3.map((r) => ({ label: r.label, y: r.rows, percent: r.percent }));
-  drawBars(q(root, 'chart1'), chartRows1, { ...eda04ChartOptions, color: '#d97706', yMax: 100, yScaleMax: 112, hideZeroTick: true });
-  drawBars(q(root, 'chart2'), chartRows2, { ...eda04ChartOptions, color: '#0f766e', yMax: 100, yScaleMax: 112, hideZeroTick: true });
-  drawBars(q(root, 'chart3'), chartRows3, { ...eda04ChartOptions, color: '#7c3aed', yMax: 100, yScaleMax: 112, hideZeroTick: true });
+  drawBars(q(root, 'chart1'), chartRows1, { ...EDA04_CHART_OPTIONS, color: '#d97706', yMax: 100, yScaleMax: 112, hideZeroTick: true });
+  drawBars(q(root, 'chart2'), chartRows2, { ...EDA04_CHART_OPTIONS, color: '#0f766e', yMax: 100, yScaleMax: 112, hideZeroTick: true });
+  drawBars(q(root, 'chart3'), chartRows3, { ...EDA04_CHART_OPTIONS, color: '#7c3aed', yMax: 100, yScaleMax: 112, hideZeroTick: true });
 
   const tb1 = q(root, 'tb1');
   const tb2 = q(root, 'tb2');
@@ -276,15 +358,13 @@ function render05(root, data) {
 
   const kpis = root.querySelector('.kpis');
   if (kpis) {
-    kpis.classList.add('kpis-inline', 'kpis-eda01-style');
     const rows = [
       ['raw_count', summary.raw_count ?? summary.raw_row_count ?? summary.total_input_rows],
       ['clean_count', summary.clean_count ?? summary.clean_row_count ?? summary.total_clean_rows],
       ['removed_count', summary.removed_count ?? summary.removed_row_count ?? summary.total_removed_rows],
       ['removed_percentage', summary.removed_percentage ?? summary.total_removed_percent],
     ];
-    kpis.innerHTML = rows.map(([k, v]) => kvRowHtml(k, v)).join('');
-    balanceFlexRows(kpis, '.k01-meta-row', 'kpi-break');
+    renderKpiRows(kpis, rows, ['kpis-inline', 'kpis-eda01-style']);
   }
 
   const prevBtn = q(root, 'prevBtn');
@@ -298,21 +378,17 @@ function render05(root, data) {
     + Number(r.shared_removed_count ?? r.shared_removed_row_count ?? r.removed_shared_rows ?? 0);
   const sortedRules = [...rules].sort((a, b) => ruleRemovedCount(b) - ruleRemovedCount(a));
 
-  if (rulesHead) {
-    const headers = data.rules_headers || [
-      'column_name',
-      'rule_name',
-      'invalid_count',
-      'exclusive_removed_count',
-      'shared_removed_count',
-      'invalid_percentage',
-      'exclusive_removed_percentage',
-      'shared_removed_percentage',
-    ];
-    rulesHead.innerHTML = headers
-      .map((header) => `<th>${esc(displayLabel(header))}</th>`)
-      .join('');
-  }
+  const headers = data.rules_headers || [
+    'column_name',
+    'rule_name',
+    'invalid_count',
+    'exclusive_removed_count',
+    'shared_removed_count',
+    'invalid_percentage',
+    'exclusive_removed_percentage',
+    'shared_removed_percentage',
+  ];
+  renderHeadRow(rulesHead, headers);
 
   function drawPage() {
     const totalPages = Math.max(1, Math.ceil(rules.length / pageSize));
@@ -406,232 +482,24 @@ function render07(root, data) {
   draw();
 }
 
-function drawFeatureMetricLine(svg, rows, metric) {
-  if (!svg) return;
-  while (svg.firstChild) svg.removeChild(svg.firstChild);
-  const W = 1040;
-  const H = 300;
-  const margin = { top: 22, right: 24, bottom: 42, left: 86 };
-  const plotW = W - margin.left - margin.right;
-  const plotH = H - margin.top - margin.bottom;
-  const values = rows.map((row) => Number(row[metric] ?? 0)).filter(Number.isFinite);
-  const minValue = Math.min(...values);
-  const maxValue = Math.max(...values);
-  const valueSpan = Math.max(1e-9, maxValue - minValue);
-  const splitAtZero = metric === 'avg_temp'
-    && minValue < 0
-    && maxValue > 0;
-  const yScaleMin = splitAtZero
-    ? minValue - Math.abs(minValue) * 0.12
-    : minValue < 0
-      ? minValue - valueSpan * 0.18
-      : Math.max(0, minValue - valueSpan * 0.18);
-  const yScaleMax = splitAtZero
-    ? maxValue + Math.abs(maxValue) * 0.12
-    : maxValue + valueSpan * 0.18;
-  const yScaleSpan = Math.max(1e-9, yScaleMax - yScaleMin);
-  const denom = Math.max(1, rows.length - 1);
-  const pointX = (idx) => margin.left + (idx / denom) * plotW;
-  const pointY = (value) => margin.top + plotH - ((Number(value || 0) - yScaleMin) / yScaleSpan) * plotH;
-  const fmtNumber = (value) => {
-    const n = Number(value);
-    if (!Number.isFinite(n)) return '';
-    return n.toLocaleString(undefined, { maximumFractionDigits: 2 });
-  };
-
-  svg.appendChild(mk('rect', { x: 0, y: 0, width: W, height: H, fill: '#fff' }));
-  if (!rows.length) {
-    const text = mk('text', { x: W / 2, y: H / 2, 'text-anchor': 'middle', fill: '#64748b', 'font-size': 13 });
-    text.textContent = 'No data.';
-    svg.appendChild(text);
-    return;
-  }
-
-  const yForTick = (value) => margin.top + plotH - ((value - yScaleMin) / yScaleSpan) * plotH;
-  const yTicks = splitAtZero
-    ? (() => {
-        const yZero = yForTick(0);
-        const minGap = 20;
-        const buildSideTicks = (start, end, availableHeight) => {
-          const segmentCount = Math.max(1, Math.min(6, Math.floor(availableHeight / 28)));
-          return Array.from({ length: segmentCount }, (_, i) => start + (end - start) * (i / segmentCount));
-        };
-        const ticks = [
-          ...buildSideTicks(yScaleMin, 0, margin.top + plotH - yZero),
-          0,
-          ...buildSideTicks(yScaleMax, 0, yZero - margin.top).reverse(),
-        ];
-        const used = [];
-        return ticks.filter((tick) => {
-          const y = yForTick(tick);
-          if (tick !== 0 && Math.abs(y - yZero) < minGap) return false;
-          if (used.some((usedY) => Math.abs(usedY - y) < minGap)) return false;
-          used.push(y);
-          return true;
-        });
-      })()
-    : Array.from({ length: 6 }, (_, i) => yScaleMin + yScaleSpan * (i / 5));
-  yTicks.forEach((yv) => {
-    const y = yForTick(yv);
-    if (splitAtZero && Math.abs(yv) < 1e-12) return;
-    svg.appendChild(mk('line', { x1: margin.left, y1: y, x2: W - margin.right, y2: y, stroke: '#e2e8f0' }));
-    const label = mk('text', { x: margin.left - 8, y: y + 4, 'text-anchor': 'end', 'font-size': 11, fill: '#64748b' });
-    label.textContent = fmtNumber(yv);
-    svg.appendChild(label);
-  });
-  svg.appendChild(mk('line', { x1: margin.left, y1: margin.top + plotH, x2: W - margin.right, y2: margin.top + plotH, stroke: '#475569' }));
-  svg.appendChild(mk('line', { x1: margin.left, y1: margin.top, x2: margin.left, y2: margin.top + plotH, stroke: '#475569' }));
-
-  const points = rows.map((row, idx) => ({
-    x: pointX(idx),
-    y: pointY(row[metric]),
-    prcp: row.prcp,
-    value: row[metric],
-  }));
-  const baseY = margin.top + plotH;
-  let zeroOverlayLine = null;
-  let zeroOverlayLabel = null;
-  if (splitAtZero) {
-    const yZero = pointY(0);
-    const drawSegmentFill = (a, b, fill) => {
-      svg.appendChild(mk('polygon', {
-        points: `${a.x},${yZero} ${a.x},${a.y} ${b.x},${b.y} ${b.x},${yZero}`,
-        fill,
-        'fill-opacity': 0.25,
-        stroke: 'none',
-      }));
-    };
-    const drawSegment = (a, b, stroke) => {
-      svg.appendChild(mk('line', {
-        x1: a.x,
-        y1: a.y,
-        x2: b.x,
-        y2: b.y,
-        fill: 'none',
-        stroke,
-        'stroke-width': 2,
-        'stroke-linecap': 'butt',
-      }));
-    };
-    for (let i = 1; i < points.length; i += 1) {
-      const prev = points[i - 1];
-      const point = points[i];
-      const prevValue = Number(prev.value);
-      const value = Number(point.value);
-      if (!Number.isFinite(prevValue) || !Number.isFinite(value)) continue;
-      if ((prevValue < 0 && value > 0) || (prevValue > 0 && value < 0)) {
-        const ratio = (0 - prevValue) / (value - prevValue);
-        const zeroPoint = {
-          x: prev.x + (point.x - prev.x) * ratio,
-          y: yZero,
-        };
-        drawSegmentFill(prev, zeroPoint, prevValue < 0 ? '#fecaca' : '#93c5fd');
-        drawSegmentFill(zeroPoint, point, value < 0 ? '#fecaca' : '#93c5fd');
-        drawSegment(prev, zeroPoint, prevValue < 0 ? '#dc2626' : '#1d4ed8');
-        drawSegment(zeroPoint, point, value < 0 ? '#dc2626' : '#1d4ed8');
-      } else {
-        drawSegmentFill(prev, point, value < 0 || prevValue < 0 ? '#fecaca' : '#93c5fd');
-        drawSegment(prev, point, value < 0 || prevValue < 0 ? '#dc2626' : '#1d4ed8');
-      }
-    }
-    zeroOverlayLine = mk('line', {
-      x1: margin.left,
-      y1: yZero,
-      x2: W - margin.right,
-      y2: yZero,
-      stroke: '#475569',
-      'stroke-width': 1.4,
-    });
-    zeroOverlayLabel = mk('text', { x: margin.left - 8, y: yZero + 4, 'text-anchor': 'end', 'font-size': 11, fill: '#475569', 'font-weight': 700 });
-    zeroOverlayLabel.textContent = '0';
-  } else {
-    svg.appendChild(mk('polygon', {
-      points: `${points[0].x},${baseY} ${points.map((p) => `${p.x},${p.y}`).join(' ')} ${points[points.length - 1].x},${baseY}`,
-      fill: '#93c5fd',
-      'fill-opacity': 0.25,
-      stroke: 'none',
-    }));
-    svg.appendChild(mk('polyline', {
-      points: points.map((p) => `${p.x},${p.y}`).join(' '),
-      fill: 'none',
-      stroke: '#1d4ed8',
-      'stroke-width': 2,
-    }));
-  }
-  points.forEach((point) => {
-    const fill = splitAtZero && Number(point.value) < 0 ? '#dc2626' : '#1d4ed8';
-    svg.appendChild(mk('circle', { cx: point.x, cy: point.y, r: rows.length > 80 ? 1.5 : 2.5, fill, stroke: '#0f172a', 'stroke-width': 0.7 }));
-  });
-  if (zeroOverlayLine) svg.appendChild(zeroOverlayLine);
-  if (zeroOverlayLabel) svg.appendChild(zeroOverlayLabel);
-
-  const labelStep = Math.max(1, Math.ceil(rows.length / 12));
-  points.forEach((point, idx) => {
-    if (!(idx === 0 || idx === points.length - 1 || idx % labelStep === 0)) return;
-    const label = mk('text', { x: point.x, y: margin.top + plotH + 15, 'text-anchor': 'middle', 'font-size': 10, fill: '#475569' });
-    label.textContent = String(rows[idx].date || point.prcp);
-    svg.appendChild(label);
-  });
-}
-
 function renderFeature02(root, data) {
-  const buildRows = () => {
-    if (Array.isArray(data.rows)) return data.rows;
-    const dates = data.date || [];
-    const prcp = data.prcp || [];
-    const avgTemp = data.avg_temp || [];
-    const tempRange = data.temp_range || [];
-    const tripCount = data.trip_count || [];
-    const avgDuration = data.avg_duration_minutes || [];
-    const avgDistance = data.avg_trip_distance || [];
-    const avgFare = data.avg_fare_amount || [];
-    const avgTip = data.avg_tip_amount || [];
-    const avgTotal = data.avg_total_amount || [];
-    return dates.map((value, index) => ({
-      date: value,
-      prcp: prcp[index],
-      avg_temp: avgTemp[index],
-      temp_range: tempRange[index],
-      trip_count: tripCount[index],
-      avg_duration_minutes: avgDuration[index],
-      avg_trip_distance: avgDistance[index],
-      avg_fare_amount: avgFare[index],
-      avg_tip_amount: avgTip[index],
-      avg_total_amount: avgTotal[index],
-    }));
-  };
-  const rows = buildRows();
-  const metrics = [
-    'trip_count',
-    'prcp',
-    'avg_temp',
-    'temp_range',
-    'avg_duration_minutes',
-    'avg_trip_distance',
-    'avg_fare_amount',
-    'avg_tip_amount',
-    'avg_total_amount',
-  ];
+  const rows = getFeature02Rows(data);
   const tabs = root.querySelector('.js-tabs');
   const chart = q(root, 'chart');
   const chartTitle = q(root, 'chartTitle');
   const head = q(root, 'feature02Head');
   const body = q(root, 'feature02Body');
-  let activeMetric = metrics[0];
+  let activeMetric = FEATURE02_METRICS[0];
 
   function draw() {
-    const metricItems = metrics.map((metric) => ({ column_name: metric }));
-    renderInnerTabs(tabs, metricItems, metrics.indexOf(activeMetric), (idx) => {
-      activeMetric = metrics[idx];
+    const metricItems = FEATURE02_METRICS.map((metric) => ({ column_name: metric }));
+    renderInnerTabs(tabs, metricItems, FEATURE02_METRICS.indexOf(activeMetric), (idx) => {
+      activeMetric = FEATURE02_METRICS[idx];
       draw();
     });
     if (chartTitle) chartTitle.textContent = `${activeMetric} by date`;
     drawFeatureMetricLine(chart, rows, activeMetric);
-    if (head) {
-      head.innerHTML = ['date', activeMetric]
-        .map((header) => `<th>${esc(header)}</th>`)
-        .join('');
-    }
+    renderHeadRow(head, ['date', activeMetric]);
     renderRows(
       body,
       rows,
@@ -645,50 +513,6 @@ function renderFeature02(root, data) {
   }
 
   draw();
-}
-
-function drawFeatureCategoryBars(svg, rows, metric) {
-  if (!svg) return;
-  while (svg.firstChild) svg.removeChild(svg.firstChild);
-  const W = 1040;
-  const H = 300;
-  const margin = { top: 22, right: 24, bottom: 54, left: 92 };
-  const plotW = W - margin.left - margin.right;
-  const plotH = H - margin.top - margin.bottom;
-  const values = rows.map((row) => Number(row[metric] ?? 0)).filter(Number.isFinite);
-  const maxY = Math.max(1, ...values) * 1.12;
-  const slotW = plotW / Math.max(1, rows.length);
-  const barW = Math.min(96, slotW * 0.58);
-  const fmtNumber = (value) => Number(value || 0).toLocaleString(undefined, { maximumFractionDigits: 2 });
-
-  svg.appendChild(mk('rect', { x: 0, y: 0, width: W, height: H, fill: '#fff' }));
-  if (!rows.length) return;
-
-  for (let i = 0; i <= 5; i += 1) {
-    const yv = maxY * (i / 5);
-    const y = margin.top + plotH - (yv / maxY) * plotH;
-    svg.appendChild(mk('line', { x1: margin.left, y1: y, x2: W - margin.right, y2: y, stroke: '#e2e8f0' }));
-    const yLabel = mk('text', { x: margin.left - 8, y: y + 4, 'text-anchor': 'end', 'font-size': 11, fill: '#64748b' });
-    yLabel.textContent = fmtNumber(yv);
-    svg.appendChild(yLabel);
-  }
-  svg.appendChild(mk('line', { x1: margin.left, y1: margin.top + plotH, x2: W - margin.right, y2: margin.top + plotH, stroke: '#475569' }));
-  svg.appendChild(mk('line', { x1: margin.left, y1: margin.top, x2: margin.left, y2: margin.top + plotH, stroke: '#475569' }));
-
-  rows.forEach((row, index) => {
-    const value = Number(row[metric] ?? 0);
-    const xCenter = margin.left + index * slotW + slotW / 2;
-    const height = (value / maxY) * plotH;
-    const y = margin.top + plotH - height;
-    const x = xCenter - barW / 2;
-    svg.appendChild(mk('rect', { x, y, width: barW, height, fill: row.rain_status === 'rain' ? '#1d4ed8' : '#0f766e', rx: 3, ry: 3 }));
-    const valueLabel = mk('text', { x: xCenter, y: Math.max(margin.top + 10, y - 6), 'text-anchor': 'middle', 'font-size': 10, fill: '#0f172a' });
-    valueLabel.textContent = fmtNumber(value);
-    svg.appendChild(valueLabel);
-    const label = mk('text', { x: xCenter, y: margin.top + plotH + 16, 'text-anchor': 'middle', 'font-size': 10, fill: '#475569' });
-    label.textContent = row.label;
-    svg.appendChild(label);
-  });
 }
 
 function buildFeatureCategoryRows(data, mode) {
@@ -754,25 +578,12 @@ function renderFeatureCategoryPanel(root, sectionData, mode, ids, activeMetric, 
 
   if (chartTitle) chartTitle.textContent = `${activeMetric} comparison`;
   drawFeatureCategoryBars(chart, rows, activeMetric);
-  const leadingHeaders = mode === 'day_type_rain_status'
-    ? ['day_type', 'rain_status']
-    : mode === 'rain_level'
-      ? ['rain_level', 'value_range']
-      : mode === 'weather_level'
-        ? ['weather_level', 'value_range']
-        : ['rain_status'];
-  if (head) {
-      head.innerHTML = [
-        ...leadingHeaders,
-        'day_count',
-        activeMetric,
-        'diff_from_baseline',
-      ].map((header) => `<th>${esc(displayLabel(header))}</th>`).join('');
-  }
+  const leadingHeaders = getFeatureCategoryHeaders(mode);
+  renderHeadRow(head, [...leadingHeaders, 'day_count', activeMetric, 'diff_from_baseline']);
   renderRows(body, rows, (row) => `
     <tr>
       ${mode === 'day_type_rain_status' ? `<td>${esc(row.day_type)}</td>` : ''}
-      <td>${esc(mode === 'rain_level' ? row.rain_level : mode === 'weather_level' ? row.weather_level : row.rain_status)}</td>
+      <td>${esc(getFeatureCategoryValue(row, mode))}</td>
       ${mode === 'rain_level' || mode === 'weather_level' ? `<td>${esc(row.value_range)}</td>` : ''}
       <td>${fmtInt(row.day_count)}</td>
       <td>${activeMetric === 'avg_trip_count' ? fmtInt(row[activeMetric]) : esc(row[activeMetric])}</td>
@@ -782,15 +593,7 @@ function renderFeatureCategoryPanel(root, sectionData, mode, ids, activeMetric, 
 }
 
 function renderFeature03Combined(root, data) {
-  const weatherColumns = data.weather_columns || ['prcp', 'avg_temp', 'temp_range'];
-  const metrics = [
-    'avg_trip_count',
-    'avg_duration_minutes',
-    'avg_trip_distance',
-    'avg_fare_amount',
-    'avg_tip_amount',
-    'avg_total_amount',
-  ];
+  const weatherColumns = data.weather_columns || FEATURE03_WEATHER_COLUMNS;
   const weatherTabs = q(root, 'feature03WeatherTabs');
   const metricTabs = q(root, 'feature03MetricTabs');
   const rainStatusSection = q(root, 'rainStatusSection');
@@ -799,14 +602,14 @@ function renderFeature03Combined(root, data) {
   const summarySection = q(root, 'feature03SummarySection');
   const weatherLevelHeading = q(root, 'weatherLevelHeading');
   let activeWeather = weatherColumns[0] || 'prcp';
-  let activeMetric = metrics[0];
+  let activeMetric = FEATURE03_METRICS[0];
   const drawMetricPanels = () => {
     renderInnerTabs(weatherTabs, weatherColumns.map((column) => ({ column_name: column })), weatherColumns.indexOf(activeWeather), (idx) => {
       activeWeather = weatherColumns[idx];
       drawMetricPanels();
     });
-    renderInnerTabs(metricTabs, metrics.map((metric) => ({ column_name: metric })), metrics.indexOf(activeMetric), (idx) => {
-      activeMetric = metrics[idx];
+    renderInnerTabs(metricTabs, FEATURE03_METRICS.map((metric) => ({ column_name: metric })), FEATURE03_METRICS.indexOf(activeMetric), (idx) => {
+      activeMetric = FEATURE03_METRICS[idx];
       drawMetricPanels();
     });
 

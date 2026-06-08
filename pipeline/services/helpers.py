@@ -1,4 +1,4 @@
-﻿import csv
+import csv
 import json
 from decimal import Decimal
 from pathlib import Path
@@ -132,13 +132,6 @@ def write_metadata_csv(
     write_csv(output_dir / "metadata.csv", rows, preserve_header_underscores=True)
 
 
-def write_key_value_csv(output_dir: Path, name: str, values: dict[str, Any]) -> None:
-    write_csv(
-        output_dir / f"{name}.csv",
-        [{"key": key, "value": value} for key, value in values.items()],
-    )
-
-
 def write_low_unique_csvs(output_dir: Path, rows: list[dict[str, Any]]) -> None:
     columns = []
     value_rows = []
@@ -242,34 +235,6 @@ def write_high_unique_csvs(
     if numeric_rows:
         write_csv(output_dir / f"{base_name}_columns_numeric.csv", numeric_rows)
         write_csv(output_dir / f"{base_name}_columns_numeric_array.csv", numeric_array_rows)
-
-
-# format json
-def write_json_compact(
-    output_path: Path,
-    payload,
-    *,
-    indent: int = 2,
-    compact_list_min_items: int = 21,
-    compact_array_paths: list[tuple] | None = None,
-    align_object_values: bool = False,
-    align_compact_array_items: bool = False,
-    align_compact_array_key_labels: bool = False,
-    compact_all_scalar_arrays: bool = False,
-    parallel_array_groups: list[tuple[str, ...]] | None = None,
-) -> None:
-    text = dumps_json_compact(
-        payload,
-        indent=indent,
-        compact_list_min_items=compact_list_min_items,
-        compact_array_paths=compact_array_paths,
-        align_object_values=align_object_values,
-        align_compact_array_items=align_compact_array_items,
-        align_compact_array_key_labels=align_compact_array_key_labels,
-        compact_all_scalar_arrays=compact_all_scalar_arrays,
-        parallel_array_groups=parallel_array_groups,
-    )
-    output_path.write_text(text + "\n", encoding="utf-8")
 
 
 def dumps_json_compact(

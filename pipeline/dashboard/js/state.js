@@ -83,12 +83,10 @@
     const filesRows = columnarToRows(stepData.files);
     return {
       ...metadataToObject(stepData.metadata),
-      files: filesRows.map((row) => row.file ?? row.file_name).filter(Boolean),
       files_rows: filesRows,
       files_headers: Object.keys(stepData.files || {}),
       schema_rows: columnarToRows(stepData.schema),
       schema_headers: Object.keys(stepData.schema || {}),
-      files_mismatches: [],
     };
   }
 
@@ -145,7 +143,6 @@
       temp_range_level: withRowCount(stepData.temp_range_level),
       impact_summary: impactSummary,
       weather_columns: ['prcp', 'avg_temp', 'temp_range'],
-      metrics: impactSummary.metric || [],
     };
   }
 

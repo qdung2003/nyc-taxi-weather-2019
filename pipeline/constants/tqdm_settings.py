@@ -1,4 +1,4 @@
-﻿import sys
+import sys
 
 
 TQDM_DISABLE = not sys.stderr.isatty()

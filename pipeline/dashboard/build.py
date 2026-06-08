@@ -1,6 +1,7 @@
 import csv
 import os
 import subprocess
+import webbrowser
 from shutil import which
 
 from pipeline.constants.paths import (
@@ -157,6 +158,8 @@ def open_dashboard_html() -> None:
     browser_url = resolved_html.as_uri()
     methods: list[tuple[str, callable]] = []
 
+    methods.append(("webbrowser.open", lambda: webbrowser.open(browser_url, new=2)))
+
     browser_candidates = [
         ("msedge", ["msedge", browser_url]),
         ("chrome", ["chrome", browser_url]),
@@ -193,14 +196,11 @@ def open_dashboard_html() -> None:
                 ),
             ))
 
-    if hasattr(os, "startfile"):
-        methods.append(("os.startfile", lambda: os.startfile(str(resolved_html))))
-
     methods.extend([
         (
             "rundll32 FileProtocolHandler",
             lambda: subprocess.run(
-                ["rundll32.exe", "url.dll,FileProtocolHandler", str(resolved_html)],
+                ["rundll32.exe", "url.dll,FileProtocolHandler", browser_url],
                 check=True,
                 stdout=subprocess.DEVNULL,
                 stderr=subprocess.PIPE,
@@ -210,7 +210,7 @@ def open_dashboard_html() -> None:
         (
             "cmd start",
             lambda: subprocess.run(
-                ["cmd.exe", "/c", "start", "", str(resolved_html)],
+                ["cmd.exe", "/c", "start", "", browser_url],
                 check=True,
                 stdout=subprocess.DEVNULL,
                 stderr=subprocess.PIPE,
@@ -224,18 +224,8 @@ def open_dashboard_html() -> None:
                     "C:\\Windows\\System32\\WindowsPowerShell\\v1.0\\powershell.exe",
                     "-NoProfile",
                     "-Command",
-                    f"Start-Process -FilePath '{resolved_html}'",
+                    f"Start-Process '{browser_url}'",
                 ],
-                check=True,
-                stdout=subprocess.DEVNULL,
-                stderr=subprocess.PIPE,
-                text=True,
-            ),
-        ),
-        (
-            "explorer.exe",
-            lambda: subprocess.run(
-                ["explorer.exe", str(resolved_html)],
                 check=True,
                 stdout=subprocess.DEVNULL,
                 stderr=subprocess.PIPE,
@@ -263,7 +253,6 @@ def main(open_html: bool = True) -> None:
         build_payload(),
         indent=2,
         compact_list_min_items=1,
-        align_compact_array_items=True,
         compact_all_scalar_arrays=True,
     )
     DATA_JS_FILE.write_text(

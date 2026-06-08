@@ -1,10 +1,47 @@
-﻿(function (D) {
-  const { mk, fmtPct, shortText } = D;
+(function (D) {
+  const {
+    mk,
+    fmtPct,
+    shortText,
+    buildSideTicks,
+    createChartPointY,
+    createIndexedPointX,
+    formatChartNumber,
+    interpolateRatio,
+  } = D;
+  function resetSvg(svg, width, height) {
+    while (svg.firstChild) svg.removeChild(svg.firstChild);
+    svg.appendChild(mk('rect', { x: 0, y: 0, width, height, fill: '#fff' }));
+  }
+
+  function appendEmptyState(svg, width, height, text) {
+    const label = mk('text', { x: width / 2, y: height / 2, 'text-anchor': 'middle', fill: '#64748b', 'font-size': 13 });
+    label.textContent = text;
+    svg.appendChild(label);
+  }
+
+  function drawAxes(svg, width, margin, plotHeight) {
+    svg.appendChild(mk('line', { x1: margin.left, y1: margin.top + plotHeight, x2: width - margin.right, y2: margin.top + plotHeight, stroke: '#475569' }));
+    svg.appendChild(mk('line', { x1: margin.left, y1: margin.top, x2: margin.left, y2: margin.top + plotHeight, stroke: '#475569' }));
+  }
+
+  function drawYAxis(svg, width, margin, plotHeight, scaleMin, scaleMax, ticks, formatTick, options = {}) {
+    const span = Math.max(1e-9, scaleMax - scaleMin);
+    ticks.forEach((tick) => {
+      if (options.skipTick?.(tick)) return;
+      const y = margin.top + plotHeight - ((tick - scaleMin) / span) * plotHeight;
+      svg.appendChild(mk('line', { x1: margin.left, y1: y, x2: width - margin.right, y2: y, stroke: '#e2e8f0' }));
+      const label = mk('text', { x: margin.left - 8, y: y + 4, 'text-anchor': 'end', 'font-size': 11, fill: '#64748b' });
+      label.textContent = formatTick(tick);
+      svg.appendChild(label);
+    });
+    drawAxes(svg, width, margin, plotHeight);
+  }
 function drawBars(svg, rows, opts = {}) {
   if (!svg) return;
-  while (svg.firstChild) svg.removeChild(svg.firstChild);
   const W = opts.w || 1040;
   const H = opts.h || 252;
+  resetSvg(svg, W, H);
   const margin = opts.margin || { top: 16, right: 16, bottom: 34, left: 80 };
   const lineRightPad = rows.length > (opts.lineThreshold || 50) ? 18 : 0;
   const plotW = W - margin.left - margin.right - lineRightPad;
@@ -48,28 +85,25 @@ function drawBars(svg, rows, opts = {}) {
     return raw;
   };
 
-  svg.appendChild(mk('rect', { x: 0, y: 0, width: W, height: H, fill: '#fff' }));
   if (!rows.length) {
-    const t = mk('text', { x: W / 2, y: H / 2, 'text-anchor': 'middle', fill: '#64748b', 'font-size': 13 });
-    t.textContent = 'No chart data for this column.';
-    svg.appendChild(t);
+    appendEmptyState(svg, W, H, 'No chart data for this column.');
     return;
   }
 
   const firstTick = opts.hideZeroTick ? 1 : 0;
-  for (let i = firstTick; i <= 5; i += 1) {
-    const yv = yTickMax * (i / 5);
-    const y = margin.top + plotH - (yv / yScaleMax) * plotH;
-    svg.appendChild(mk('line', { x1: margin.left, y1: y, x2: W - margin.right, y2: y, stroke: '#e2e8f0' }));
-    const yLabel = mk('text', { x: margin.left - 8, y: y + 4, 'text-anchor': 'end', 'font-size': 11, fill: '#64748b' });
-    yLabel.textContent = fmtPct(yv);
-    svg.appendChild(yLabel);
-  }
-  svg.appendChild(mk('line', { x1: margin.left, y1: margin.top + plotH, x2: W - margin.right, y2: margin.top + plotH, stroke: '#475569' }));
-  svg.appendChild(mk('line', { x1: margin.left, y1: margin.top, x2: margin.left, y2: margin.top + plotH, stroke: '#475569' }));
+  drawYAxis(
+    svg,
+    W,
+    margin,
+    plotH,
+    0,
+    yScaleMax,
+    Array.from({ length: 6 - firstTick }, (_, index) => yTickMax * ((index + firstTick) / 5)),
+    fmtPct,
+  );
 
   if (useLineChart) {
-    const denom = Math.max(1, rows.length - 1);
+    const defaultPointX = createIndexedPointX(margin.left, plotW, rows.length);
     const pointX = (idx) => {
       if (splitRowsAtZero) {
         const value = numericValue(rows[idx]);
@@ -78,9 +112,9 @@ function drawBars(svg, rows, opts = {}) {
           return margin.left + ((value - minSplitValue) / den) * plotW;
         }
       }
-      return margin.left + (idx / denom) * plotW;
+      return defaultPointX(idx);
     };
-    const pointY = (v) => margin.top + plotH - (Number(v || 0) / yScaleMax) * plotH;
+    const pointY = createChartPointY(margin.top, plotH, 0, yScaleMax);
     const yBase = margin.top + plotH;
     const appendAreaLine = (points, fill, stroke) => {
       if (points.length < 2) return;
@@ -105,7 +139,7 @@ function drawBars(svg, rows, opts = {}) {
         if (i > 0) {
           const prev = points[i - 1];
           if (prev.value !== null && prev.value < 0 && point.value >= 0) {
-            const ratio = (0 - prev.value) / Math.max(1e-9, point.value - prev.value);
+            const ratio = interpolateRatio(prev.value, point.value);
             yZero = prev.y + (point.y - prev.y) * ratio;
             const zeroPoint = { x: xZero, y: yZero, value: 0 };
             negPoints.push(zeroPoint);
@@ -136,16 +170,12 @@ function drawBars(svg, rows, opts = {}) {
         const rounded = Math.round(value * 10) / 10;
         return Number.isInteger(rounded) ? String(rounded) : rounded.toFixed(1);
       };
-      const buildSideTicks = (start, end, availableWidth) => {
-        const segmentCount = Math.max(1, Math.min(4, Math.floor(availableWidth / 90)));
-        return Array.from({ length: segmentCount }, (_, i) => start + (end - start) * (i / segmentCount));
-      };
       const xZero = xForValue(0);
       const minGap = 44;
       const ticks = [
-        ...buildSideTicks(minSplitValue, 0, xZero - margin.left),
+        ...buildSideTicks(minSplitValue, 0, xZero - margin.left, 90, 4),
         0,
-        ...buildSideTicks(maxSplitValue, 0, W - margin.right - xZero).reverse(),
+        ...buildSideTicks(maxSplitValue, 0, W - margin.right - xZero, 90, 4).reverse(),
       ];
       const used = [];
       ticks.forEach((tick) => {
@@ -242,9 +272,9 @@ function drawBars(svg, rows, opts = {}) {
 
 function drawStackedBars(svg, rows, opts = {}) {
   if (!svg) return;
-  while (svg.firstChild) svg.removeChild(svg.firstChild);
   const W = opts.w || 1080;
   const H = opts.h || 320;
+  resetSvg(svg, W, H);
   const margin = opts.margin || { top: 22, right: 24, bottom: 44, left: 72 };
   const plotW = W - margin.left - margin.right;
   const plotH = H - margin.top - margin.bottom;
@@ -259,24 +289,21 @@ function drawStackedBars(svg, rows, opts = {}) {
   const exclusiveColor = opts.exclusiveColor || '#0f766e';
   const sharedColor = opts.sharedColor || '#d97706';
 
-  svg.appendChild(mk('rect', { x: 0, y: 0, width: W, height: H, fill: '#fff' }));
   if (!rows.length) {
-    const t = mk('text', { x: W / 2, y: H / 2, 'text-anchor': 'middle', fill: '#64748b', 'font-size': 13 });
-    t.textContent = 'No chart data for this page.';
-    svg.appendChild(t);
+    appendEmptyState(svg, W, H, 'No chart data for this page.');
     return;
   }
 
-  for (let i = 0; i <= 5; i += 1) {
-    const yv = yTickMax * (i / 5);
-    const y = margin.top + plotH - (yv / yScaleMax) * plotH;
-    svg.appendChild(mk('line', { x1: margin.left, y1: y, x2: W - margin.right, y2: y, stroke: '#e2e8f0' }));
-    const yLabel = mk('text', { x: margin.left - 8, y: y + 4, 'text-anchor': 'end', 'font-size': 11, fill: '#64748b' });
-    yLabel.textContent = fmtPct(yv);
-    svg.appendChild(yLabel);
-  }
-  svg.appendChild(mk('line', { x1: margin.left, y1: margin.top + plotH, x2: W - margin.right, y2: margin.top + plotH, stroke: '#475569' }));
-  svg.appendChild(mk('line', { x1: margin.left, y1: margin.top, x2: margin.left, y2: margin.top + plotH, stroke: '#475569' }));
+  drawYAxis(
+    svg,
+    W,
+    margin,
+    plotH,
+    0,
+    yScaleMax,
+    Array.from({ length: 6 }, (_, index) => yTickMax * (index / 5)),
+    fmtPct,
+  );
 
   rows.forEach((r, i) => {
     const exclusive = Number(r.exclusive_percent ?? r.exclusivePercent ?? r.exclusive ?? 0);
@@ -300,8 +327,204 @@ function drawStackedBars(svg, rows, opts = {}) {
   });
 }
 
+function drawFeatureMetricLine(svg, rows, metric) {
+  if (!svg) return;
+  const W = 1040;
+  const H = 300;
+  resetSvg(svg, W, H);
+  const margin = { top: 22, right: 24, bottom: 42, left: 86 };
+  const plotW = W - margin.left - margin.right;
+  const plotH = H - margin.top - margin.bottom;
+  const values = rows.map((row) => Number(row[metric] ?? 0)).filter(Number.isFinite);
+  const minValue = Math.min(...values);
+  const maxValue = Math.max(...values);
+  const valueSpan = Math.max(1e-9, maxValue - minValue);
+  const splitAtZero = metric === 'avg_temp' && minValue < 0 && maxValue > 0;
+  const yScaleMin = splitAtZero
+    ? minValue - Math.abs(minValue) * 0.12
+    : minValue < 0
+      ? minValue - valueSpan * 0.18
+      : Math.max(0, minValue - valueSpan * 0.18);
+  const yScaleMax = splitAtZero
+    ? maxValue + Math.abs(maxValue) * 0.12
+    : maxValue + valueSpan * 0.18;
+  const yScaleSpan = Math.max(1e-9, yScaleMax - yScaleMin);
+  const pointX = createIndexedPointX(margin.left, plotW, rows.length);
+  const pointY = createChartPointY(margin.top, plotH, yScaleMin, yScaleMax);
+  if (!rows.length) {
+    appendEmptyState(svg, W, H, 'No data.');
+    return;
+  }
+
+  const yForTick = (value) => margin.top + plotH - ((value - yScaleMin) / yScaleSpan) * plotH;
+  const yTicks = splitAtZero
+    ? (() => {
+        const yZero = yForTick(0);
+        const minGap = 20;
+        const ticks = [
+          ...buildSideTicks(yScaleMin, 0, margin.top + plotH - yZero, 28, 6),
+          0,
+          ...buildSideTicks(yScaleMax, 0, yZero - margin.top, 28, 6).reverse(),
+        ];
+        const used = [];
+        return ticks.filter((tick) => {
+          const y = yForTick(tick);
+          if (tick !== 0 && Math.abs(y - yZero) < minGap) return false;
+          if (used.some((usedY) => Math.abs(usedY - y) < minGap)) return false;
+          used.push(y);
+          return true;
+        });
+      })()
+    : Array.from({ length: 6 }, (_, i) => yScaleMin + yScaleSpan * (i / 5));
+  drawYAxis(
+    svg,
+    W,
+    margin,
+    plotH,
+    yScaleMin,
+    yScaleMax,
+    yTicks,
+    formatChartNumber,
+    { skipTick: (tick) => splitAtZero && Math.abs(tick) < 1e-12 },
+  );
+
+  const points = rows.map((row, idx) => ({
+    x: pointX(idx),
+    y: pointY(row[metric]),
+    prcp: row.prcp,
+    value: row[metric],
+  }));
+  const baseY = margin.top + plotH;
+  let zeroOverlayLine = null;
+  let zeroOverlayLabel = null;
+  if (splitAtZero) {
+    const yZero = pointY(0);
+    const drawSegmentFill = (a, b, fill) => {
+      svg.appendChild(mk('polygon', {
+        points: `${a.x},${yZero} ${a.x},${a.y} ${b.x},${b.y} ${b.x},${yZero}`,
+        fill,
+        'fill-opacity': 0.25,
+        stroke: 'none',
+      }));
+    };
+    const drawSegment = (a, b, stroke) => {
+      svg.appendChild(mk('line', {
+        x1: a.x,
+        y1: a.y,
+        x2: b.x,
+        y2: b.y,
+        fill: 'none',
+        stroke,
+        'stroke-width': 2,
+        'stroke-linecap': 'butt',
+      }));
+    };
+    for (let i = 1; i < points.length; i += 1) {
+      const prev = points[i - 1];
+      const point = points[i];
+      const prevValue = Number(prev.value);
+      const value = Number(point.value);
+      if (!Number.isFinite(prevValue) || !Number.isFinite(value)) continue;
+      if ((prevValue < 0 && value > 0) || (prevValue > 0 && value < 0)) {
+        const ratio = interpolateRatio(prevValue, value);
+        const zeroPoint = {
+          x: prev.x + (point.x - prev.x) * ratio,
+          y: yZero,
+        };
+        drawSegmentFill(prev, zeroPoint, prevValue < 0 ? '#fecaca' : '#93c5fd');
+        drawSegmentFill(zeroPoint, point, value < 0 ? '#fecaca' : '#93c5fd');
+        drawSegment(prev, zeroPoint, prevValue < 0 ? '#dc2626' : '#1d4ed8');
+        drawSegment(zeroPoint, point, value < 0 ? '#dc2626' : '#1d4ed8');
+      } else {
+        drawSegmentFill(prev, point, value < 0 || prevValue < 0 ? '#fecaca' : '#93c5fd');
+        drawSegment(prev, point, value < 0 || prevValue < 0 ? '#dc2626' : '#1d4ed8');
+      }
+    }
+    zeroOverlayLine = mk('line', {
+      x1: margin.left,
+      y1: yZero,
+      x2: W - margin.right,
+      y2: yZero,
+      stroke: '#475569',
+      'stroke-width': 1.4,
+    });
+    zeroOverlayLabel = mk('text', { x: margin.left - 8, y: yZero + 4, 'text-anchor': 'end', 'font-size': 11, fill: '#475569', 'font-weight': 700 });
+    zeroOverlayLabel.textContent = '0';
+  } else {
+    svg.appendChild(mk('polygon', {
+      points: `${points[0].x},${baseY} ${points.map((p) => `${p.x},${p.y}`).join(' ')} ${points[points.length - 1].x},${baseY}`,
+      fill: '#93c5fd',
+      'fill-opacity': 0.25,
+      stroke: 'none',
+    }));
+    svg.appendChild(mk('polyline', {
+      points: points.map((p) => `${p.x},${p.y}`).join(' '),
+      fill: 'none',
+      stroke: '#1d4ed8',
+      'stroke-width': 2,
+    }));
+  }
+  points.forEach((point) => {
+    const fill = splitAtZero && Number(point.value) < 0 ? '#dc2626' : '#1d4ed8';
+    svg.appendChild(mk('circle', { cx: point.x, cy: point.y, r: rows.length > 80 ? 1.5 : 2.5, fill, stroke: '#0f172a', 'stroke-width': 0.7 }));
+  });
+  if (zeroOverlayLine) svg.appendChild(zeroOverlayLine);
+  if (zeroOverlayLabel) svg.appendChild(zeroOverlayLabel);
+
+  const labelStep = Math.max(1, Math.ceil(rows.length / 12));
+  points.forEach((point, idx) => {
+    if (!(idx === 0 || idx === points.length - 1 || idx % labelStep === 0)) return;
+    const label = mk('text', { x: point.x, y: margin.top + plotH + 15, 'text-anchor': 'middle', 'font-size': 10, fill: '#475569' });
+    label.textContent = String(rows[idx].date || point.prcp);
+    svg.appendChild(label);
+  });
+}
+
+function drawFeatureCategoryBars(svg, rows, metric) {
+  if (!svg) return;
+  const W = 1040;
+  const H = 300;
+  resetSvg(svg, W, H);
+  const margin = { top: 22, right: 24, bottom: 54, left: 92 };
+  const plotW = W - margin.left - margin.right;
+  const plotH = H - margin.top - margin.bottom;
+  const values = rows.map((row) => Number(row[metric] ?? 0)).filter(Number.isFinite);
+  const maxY = Math.max(1, ...values) * 1.12;
+  const slotW = plotW / Math.max(1, rows.length);
+  const barW = Math.min(96, slotW * 0.58);
+  if (!rows.length) return;
+
+  drawYAxis(
+    svg,
+    W,
+    margin,
+    plotH,
+    0,
+    maxY,
+    Array.from({ length: 6 }, (_, index) => maxY * (index / 5)),
+    formatChartNumber,
+  );
+
+  rows.forEach((row, index) => {
+    const value = Number(row[metric] ?? 0);
+    const xCenter = margin.left + index * slotW + slotW / 2;
+    const height = (value / maxY) * plotH;
+    const y = margin.top + plotH - height;
+    const x = xCenter - barW / 2;
+    svg.appendChild(mk('rect', { x, y, width: barW, height, fill: row.rain_status === 'rain' ? '#1d4ed8' : '#0f766e', rx: 3, ry: 3 }));
+    const valueLabel = mk('text', { x: xCenter, y: Math.max(margin.top + 10, y - 6), 'text-anchor': 'middle', 'font-size': 10, fill: '#0f172a' });
+    valueLabel.textContent = formatChartNumber(value);
+    svg.appendChild(valueLabel);
+    const label = mk('text', { x: xCenter, y: margin.top + plotH + 16, 'text-anchor': 'middle', 'font-size': 10, fill: '#475569' });
+    label.textContent = row.label;
+    svg.appendChild(label);
+  });
+}
+
   Object.assign(D, {
     drawBars,
     drawStackedBars,
+    drawFeatureMetricLine,
+    drawFeatureCategoryBars,
   });
 })(window.Dashboard = window.Dashboard || {});

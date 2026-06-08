@@ -1,4 +1,4 @@
-﻿import csv
+import csv
 
 from pipeline.constants.modules import WEATHER02_INGEST
 from pipeline.constants.paths import WEATHER_EDA_RESULTS_DIR

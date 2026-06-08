@@ -1,5 +1,9 @@
-﻿import os, duckdb, psutil
+import os
 from contextlib import contextmanager
+
+import duckdb
+import psutil
+
 from pipeline.constants.paths import DUCKDB_TEMP_DIR, WAREHOUSE_DB_FILE
 
 
@@ -89,11 +93,3 @@ def connect_warehouse(
         conn.execute("LOAD 'parquet';")
 
     return conn
-
-
-
-
-
-
-
-

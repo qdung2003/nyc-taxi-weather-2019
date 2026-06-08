@@ -1,4 +1,4 @@
-﻿from tqdm import tqdm
+from tqdm import tqdm
 
 from pipeline.constants.modules import WEATHER02_INGEST
 from pipeline.constants.paths import WAREHOUSE_DB_FILE, WEATHER_EDA_RESULTS_DIR

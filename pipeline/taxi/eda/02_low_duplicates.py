@@ -1,4 +1,4 @@
-﻿from tqdm import tqdm
+from tqdm import tqdm
 from pipeline.services.helpers import reset_csv_dir, write_high_unique_csvs, write_low_unique_csvs, write_metadata_csv
 from pipeline.services.queries import (
     build_low_unique_columns,
