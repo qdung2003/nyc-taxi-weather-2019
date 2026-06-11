@@ -6,7 +6,7 @@ from pipeline.services.helpers import percentage, reset_csv_dir, write_csv, writ
 from pipeline.services.queries import ensure_table_exists, quote_identifier, run_with_conn
 
 
-output_file = TAXI_EDA_RESULTS_DIR / "05_before_business_rules"
+output_file = TAXI_EDA_RESULTS_DIR / "06_before_business_rules"
 TAXI_EDA_RESULTS_DIR.mkdir(parents=True, exist_ok=True)
 
 
@@ -120,7 +120,7 @@ def main(conn):
         ],
     )
     write_csv(output_file / "rules.csv", rules)
-    print(f"EDA 05 saved: {output_file.name}")
+    print(f"EDA 06 saved: {output_file.name}")
 
 
 if __name__ == "__main__":

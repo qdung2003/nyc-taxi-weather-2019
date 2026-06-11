@@ -61,6 +61,12 @@ body {
   align-items: center;
 }
 
+.nav-label {
+  color: var(--muted);
+  font-size: 12px;
+  font-weight: 700;
+}
+
 .nav-group-taxi {
   justify-content: flex-start;
 }
@@ -71,12 +77,6 @@ body {
 
 .nav-group-feature {
   justify-content: flex-start;
-}
-
-.nav-label {
-  color: var(--muted);
-  font-size: 12px;
-  font-weight: 700;
 }
 
 .nav-btn {
@@ -352,8 +352,19 @@ table {
 
 .eda05-rules-table th:first-child,
 .eda05-rules-table td:first-child {
-  width: auto;
   white-space: normal;
+}
+
+.eda05-rules-table th:nth-child(2),
+.eda05-rules-table td:nth-child(2) {
+  white-space: normal;
+}
+
+.eda05-rules-table th[data-locked-width],
+.eda05-rules-table td[data-locked-width] {
+  width: var(--locked-col-width);
+  min-width: var(--locked-col-width);
+  max-width: var(--locked-col-width);
 }
 
 .eda05-rules-table td:first-child code {

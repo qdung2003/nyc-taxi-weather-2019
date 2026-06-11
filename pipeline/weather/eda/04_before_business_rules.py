@@ -17,6 +17,7 @@ RULES = [
     ("SNWD", "SNWD >= 0", '"SNWD" >= 0'),
     ("TMIN", "TMIN > -459.67", '"TMIN" > -459.67'),
     ("TMAX", "TMAX > -459.67", '"TMAX" > -459.67'),
+    ("TMIN,TMAX", "TMIN <= TMAX", '"TMIN" <= "TMAX"'),
 ]
 
 

@@ -1,12 +1,12 @@
-"""Helpers for reading DuckDB tables/views in Arrow chunks for EDA scripts."""
+"""Query and profiling helpers shared across EDA and ETL scripts."""
 from datetime import datetime
 from pathlib import Path
 import csv
 import json
 from tqdm import tqdm
 from pipeline.services.connect import connect_warehouse
-from pipeline.services.helpers import round_if_needed
-from pipeline.constants.columns import MONEY_COLUMNS
+from pipeline.services.helpers import percentage, round_if_needed
+from pipeline.constants.columns import AGGREGATE_COLUMNS, MONEY_COLUMNS
 from pipeline.constants.tqdm_settings import TQDM_DISABLE, TQDM_MIN_INTERVAL
 from pipeline.constants.times import YEAR
 from pipeline.constants.unique_settings import (
@@ -27,6 +27,15 @@ def quote_identifier(name: str) -> str:
     return f'"{name.replace(chr(34), chr(34) * 2)}"'
 
 
+def sql_table_ref(name: str) -> str:
+    stripped = name.strip()
+    if not stripped:
+        return stripped
+    if stripped.startswith("(") or (stripped.startswith('"') and stripped.endswith('"')):
+        return stripped
+    return quote_identifier(stripped)
+
+
 def run_with_conn(func) -> None:
     conn = connect_warehouse()
     try:
@@ -35,17 +44,37 @@ def run_with_conn(func) -> None:
         conn.close()
 
 
+
+def _is_valid_column_split(
+    column_names: list[str],
+    low_unique_columns: list[str],
+    high_unique_columns: list[str],
+) -> bool:
+    profile_column_names = low_unique_columns + high_unique_columns
+    return len(profile_column_names) == len(column_names) and set(profile_column_names) == set(column_names)
+
+
+def _column_split(column_names: list[str], low_unique_columns: list[str], high_unique_columns: list[str]):
+    low_unique_included = set(low_unique_columns)
+    high_unique_included = set(high_unique_columns)
+    return (
+        [column_name for column_name in column_names if column_name in low_unique_included],
+        [column_name for column_name in column_names if column_name in high_unique_included],
+    )
+
+
+
+
 def ensure_table_exists(conn, table_name: str, create_func) -> None:
     table_name_literal = table_name.replace("'", "''")
-    exists = conn.execute(
+    if conn.execute(
         f"""
         SELECT 1
         FROM information_schema.tables
         WHERE table_name = '{table_name_literal}'
         LIMIT 1
         """
-    ).fetchone() is not None
-    if not exists:
+    ).fetchone() is None:
         print(f"Missing table '{table_name}', creating...")
         create_func(conn)
 
@@ -58,20 +87,19 @@ def calculate_valid_type_percentages(
     row_count: int,
 ) -> list[float]:
     column_type_pairs = [
-        (index, column_name, data_type)
-        for index, (column_name, data_type) in enumerate(zip(column_names, data_types))
+        (column_name, data_type)
+        for column_name, data_type in zip(column_names, data_types)
         if column_name and data_type
     ]
     if not row_count or not column_type_pairs:
         return [0.0 for _ in column_names]
 
     clauses = []
-    for index, column_name, data_type in column_type_pairs:
+    for column_name, data_type in column_type_pairs:
         column_name_literal = column_name.replace("'", "''")
         clauses.append(
             f"""
             SELECT
-                {index} AS column_index,
                 '{column_name_literal}' AS column_name,
                 ROUND(
                     COUNT(*) FILTER (
@@ -84,10 +112,11 @@ def calculate_valid_type_percentages(
         )
 
     rows = conn.execute(" UNION ALL ".join(clauses)).fetchall()
-    valid_type_percentages = [0.0 for _ in column_names]
-    for column_index, _column_name, valid_type_percent in rows:
-        valid_type_percentages[int(column_index)] = float(valid_type_percent or 0.0)
-    return valid_type_percentages
+    valid_type_percent_by_column = {
+        str(column_name): float(valid_type_percent or 0.0)
+        for column_name, valid_type_percent in rows
+    }
+    return [valid_type_percent_by_column.get(column_name, 0.0) for column_name in column_names]
 
 
 # low_unique_column
@@ -115,6 +144,7 @@ def build_low_unique_columns(
     source_table_quoted: str,
     column_names: list[str],
     data_types: list[str],
+    unique_counts: list[int],
     valid_type_percentages: list[float],
     row_count: int,
     *,
@@ -122,8 +152,8 @@ def build_low_unique_columns(
     leave: bool = True,
 ) -> list[dict]:
     low_unique_columns = []
-    for column_name, data_type, valid_type_percent in tqdm(
-        zip(column_names, data_types, valid_type_percentages),
+    for column_name, data_type, unique_count, valid_type_percent in tqdm(
+        zip(column_names, data_types, unique_counts, valid_type_percentages),
         desc=desc,
         unit="col",
         total=len(column_names),
@@ -154,13 +184,13 @@ def build_low_unique_columns(
         for value, count in sorted_rows:
             values.append(round_if_needed(value))
             counts.append(int(count))
-            percentages.append(round_if_needed((count / row_count * 100) if row_count else 0))
+            percentages.append(percentage(count, row_count))
 
         low_unique_columns.append(
             {
                 "column_name": column_name,
                 "data_type": data_type,
-                "unique_count": len(sorted_rows),
+                "unique_count": unique_count,
                 "valid_type_percent": valid_type_percent,
                 "values": values,
                 "counts": counts,
@@ -193,14 +223,8 @@ def get_column_groups(
                 for column_meta in high_unique_column_meta
                 if column_meta.get("column_name") is not None
             ]
-            profile_column_names = low_unique_columns + high_unique_columns
-            if len(profile_column_names) == len(column_names) and set(profile_column_names) == set(column_names):
-                low_unique_column_set = set(low_unique_columns)
-                high_unique_column_set = set(high_unique_columns)
-                return (
-                    [column_name for column_name in column_names if column_name in low_unique_column_set],
-                    [column_name for column_name in column_names if column_name in high_unique_column_set],
-                )
+            if _is_valid_column_split(column_names, low_unique_columns, high_unique_columns):
+                return _column_split(column_names, low_unique_columns, high_unique_columns)
     if profile_file:
         profile_dir = profile_file.with_suffix("") if profile_file.suffix else profile_file
         low_unique_csv = profile_dir / "low_unique_columns.csv"
@@ -208,14 +232,8 @@ def get_column_groups(
         if low_unique_csv.exists() and high_unique_csv.exists():
             low_unique_columns = read_column_names_csv(low_unique_csv)
             high_unique_columns = read_column_names_csv(high_unique_csv)
-            profile_column_names = low_unique_columns + high_unique_columns
-            if len(profile_column_names) == len(column_names) and set(profile_column_names) == set(column_names):
-                low_unique_column_set = set(low_unique_columns)
-                high_unique_column_set = set(high_unique_columns)
-                return (
-                    [column_name for column_name in column_names if column_name in low_unique_column_set],
-                    [column_name for column_name in column_names if column_name in high_unique_column_set],
-                )
+            if _is_valid_column_split(column_names, low_unique_columns, high_unique_columns):
+                return _column_split(column_names, low_unique_columns, high_unique_columns)
 
     low_unique_columns = []
     high_unique_columns = []
@@ -323,7 +341,7 @@ def profile_numeric_column(
     temp_prefix: str = "tmp_profile",
 ):
     col = quote_identifier(col_name)
-    source_table_quoted = quote_identifier(source_table)
+    source_table_quoted = sql_table_ref(source_table)
     temp_col_table = quote_identifier(f"{temp_prefix}_{col_name}_v")
 
     conn.execute(f"DROP TABLE IF EXISTS {temp_col_table}")
@@ -350,6 +368,13 @@ def profile_numeric_column(
     ).fetchone()
 
     if int(positive_count or 0) > 0:
+        min_positive_value = conn.execute(
+            f"""
+            SELECT MIN(v)
+            FROM {temp_col_table}
+            WHERE v > 0
+            """
+        ).fetchone()[0]
         max_chart, above_max_chart_quantity = conn.execute(
             f"""
             WITH q AS (
@@ -365,18 +390,24 @@ def profile_numeric_column(
             GROUP BY q.max_chart
             """
         ).fetchone()
-        bin_edges, bin_counts = build_histogram_counts(
-            conn,
-            temp_col_table,
-            float(max_chart),
-            positive_bin_count,
-        )
+        positive_lower = float(min_positive_value or 0.0)
+        positive_upper = float(max_chart)
+        if positive_upper <= positive_lower:
+            bin_edges, bin_counts = [positive_lower, positive_upper], [0] * positive_bin_count
+        else:
+            bin_edges, bin_counts, _ = build_current_histogram(
+                conn,
+                temp_col_table,
+                positive_lower,
+                positive_upper,
+                positive_bin_count,
+            )
         positive_range = {
             "bin_edges": [round_if_needed(x) for x in bin_edges[1:]],
             "bin_counts": bin_counts,
             "bin_percentages": [
-                round_if_needed((qv / total_rows * 100) if total_rows else 0)
-                for qv in bin_counts
+                round_if_needed((count / total_rows * 100) if total_rows else 0)
+                for count in bin_counts
             ],
         }
     else:
@@ -412,7 +443,7 @@ def profile_datetime_column(
     year_end: datetime = datetime(YEAR + 1, 1, 1),
 ):
     col = quote_identifier(col_name)
-    source_table_quoted = quote_identifier(source_table)
+    source_table_quoted = sql_table_ref(source_table)
     month_count_exprs = ",\n            ".join(
         f"COUNT(*) FILTER (WHERE ts >= TIMESTAMP '{year_start:%Y-%m-%d %H:%M:%S}' "
         f"AND ts < TIMESTAMP '{year_end:%Y-%m-%d %H:%M:%S}' "
@@ -448,228 +479,278 @@ def profile_datetime_column(
         "min_value": min_value.isoformat(sep=" ") if min_value else None,
         "before_year_count": int(before_year_quantity or 0),
         "month_counts": month_quantity,
-        "month_percentages": [
-            round_if_needed((qv / total_rows * 100) if total_rows else 0)
-            for qv in month_quantity
-        ],
+        "month_percentages": [percentage(count, total_rows) for count in month_quantity],
         "after_year_count": int(after_year_quantity or 0),
         "max_value": max_value.isoformat(sep=" ") if max_value else None,
         "month_count": len(month_quantity),
     }
 
 
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
 # upper_bounds
+UPPER_BOUND_PASSES = (
+    (FIRST_PASS_BIN_COUNT, FIRST_PASS_THRESHOLD_PERCENT),
+    (SECOND_PASS_BIN_COUNT, SECOND_PASS_THRESHOLD_PERCENT),
+)
+
+
 def compute_upper_bounds(
     conn,
     table_name: str,
-    *,
-    temp_prefix: str = "tmp_upper_bounds",
-) -> list[dict]:
-    total_rows = int(conn.execute(f"SELECT COUNT(*) FROM {table_name}").fetchone()[0] or 0)
-    money_temp_table = quote_identifier(f"{temp_prefix}_money")
-    money_select_sql = ",\n            ".join(
-        f"TRY_CAST({quote_identifier(column_name)} AS DOUBLE) AS {quote_identifier(column_name)}"
+    context: str,
+) -> tuple[list[dict], list[dict]]:
+    table_quoted = quote_identifier(table_name)
+    total_rows = int(
+        conn.execute(f"SELECT COUNT(*) FROM {table_quoted}").fetchone()[0] or 0
+    )
+    profile_money_columns = [
+        _compute_upper_bound_profile(conn, table_quoted, column_name, total_rows, context, False)
         for column_name in MONEY_COLUMNS
-    )
-    conn.execute(f"DROP TABLE IF EXISTS {money_temp_table}")
-    conn.execute(
-        f"""
-        CREATE TEMP TABLE {money_temp_table} AS
-        SELECT
-            {money_select_sql}
-        FROM {table_name}
-        """
-    )
-
-    stats_exprs = []
-    for column_name in MONEY_COLUMNS:
-        col = quote_identifier(column_name)
-        stats_exprs.append(
-            f"MAX({col}) FILTER (WHERE {col} > 0.0 AND NOT isnan({col})) "
-            f"AS {quote_identifier(column_name + '_max')}"
-        )
-        stats_exprs.append(
-            f"COUNT(*) FILTER (WHERE {col} = 0.0) "
-            f"AS {quote_identifier(column_name + '_zero_count')}"
-        )
-    stats_row = conn.execute(
-        f"""
-        SELECT
-            {", ".join(stats_exprs)}
-        FROM {money_temp_table}
-        """
-    ).fetchone()
-    column_stats = {}
-    stats_index = 0
-    for column_name in MONEY_COLUMNS:
-        column_stats[column_name] = (
-            float(stats_row[stats_index] or 1.0),
-            int(stats_row[stats_index + 1] or 0),
-        )
-        stats_index += 2
-
-    profiles = []
-    try:
-        for column_name in MONEY_COLUMNS:
-            max_value, zero_count = column_stats[column_name]
-            source_table, max_value, zero_count = prepare_column_source(
-                conn,
-                column_name,
-                money_temp_table,
-                temp_prefix=temp_prefix,
-                source_is_numeric=True,
-                stats=(max_value, zero_count),
-            )
-            try:
-                no_zero_count = int(total_rows) - int(zero_count)
-                second_pass_value, bin_edges, bin_counts, _bin_percentages, pass_values = iterative_trim(
-                    conn,
-                    source_table,
-                    max_value,
-                    no_zero_count,
-                    return_pass_values=True,
-                )
-                first_pass_value = pass_values[0] if pass_values else max_value
-                profiles.append(
-                    {
-                        "column_name": column_name,
-                        "max_value": round_if_needed(float(max_value)),
-                        "first_pass_value": round_if_needed(float(first_pass_value)),
-                        "second_pass_value": round_if_needed(float(second_pass_value)),
-                        "zero_count": int(zero_count or 0),
-                        "bin_edges": [
-                            round_if_needed(float(value))
-                            for value in bin_edges[1:]
-                        ],
-                        "bin_counts": bin_counts,
-                        "bin_percentages": [
-                            round_if_needed((count / total_rows * 100) if total_rows else 0)
-                            for count in bin_counts
-                        ],
-                        "range_count": len(bin_counts) + 1,
-                    }
-                )
-            finally:
-                conn.execute(f"DROP TABLE IF EXISTS {source_table}")
-    finally:
-        conn.execute(f"DROP TABLE IF EXISTS {money_temp_table}")
-    return profiles
+    ]
+    profile_aggregate_columns = [
+        _compute_upper_bound_profile(conn, table_quoted, column_name, total_rows, context, True)
+        for column_name in AGGREGATE_COLUMNS
+    ]
+    return profile_money_columns, profile_aggregate_columns
 
 
-def prepare_column_source(
+def _compute_upper_bound_profile(
     conn,
-    col_name: str,
-    table_name: str,
-    temp_prefix: str | None = None,
-    *,
-    source_is_numeric: bool = False,
-    stats: tuple[float, int] | None = None,
-):
-    col = quote_identifier(col_name)
-    value_expr = col if source_is_numeric else f"TRY_CAST({col} AS DOUBLE)"
-    source_sql = f"""
-    SELECT {value_expr} AS v
-    FROM {table_name}
-    WHERE {value_expr} IS NOT NULL
-      AND NOT isnan({value_expr})
-    """
-    if temp_prefix:
-        source_col_from = quote_identifier(f"{temp_prefix}_{col_name}_v")
-        conn.execute(f"DROP TABLE IF EXISTS {source_col_from}")
-        conn.execute(f"CREATE TEMP TABLE {source_col_from} AS {source_sql}")
-    else:
-        source_col_from = f"({source_sql})"
-    if stats is not None:
-        scan_max, zero_count = stats
-        return source_col_from, float(scan_max or 1.0), int(zero_count or 0)
+    table_quoted: str,
+    column_name: str,
+    total_rows: int,
+    context: str,
+    trim_lower: bool,
+) -> dict:
+    if context not in {"eda08", "etl05"}:
+        raise ValueError(f"Unsupported upper-bounds context: {context}")
 
-    scan_max, zero_count = conn.execute(
+    col = quote_identifier(column_name)
+    hist_min_value, hist_max_value, zero_count = conn.execute(
         f"""
         SELECT
-            MAX(v) FILTER (WHERE v > 0.0) AS scan_max,
-            COUNT(*) FILTER (WHERE v = 0.0) AS zero_count
-        FROM {source_col_from}
+            MIN({col}) FILTER (WHERE {col} > 0.0 AND NOT isnan({col})),
+            MAX({col}) FILTER (WHERE {col} > 0.0 AND NOT isnan({col})),
+            COUNT(*) FILTER (WHERE {col} = 0.0)
+        FROM {table_quoted}
         """
     ).fetchone()
-    return source_col_from, float(scan_max or 1.0), int(zero_count or 0)
+    raw_min_value, raw_max_value = conn.execute(
+        f"""
+        SELECT
+            MIN({col}),
+            MAX({col})
+        FROM {table_quoted}
+        """
+    ).fetchone()
+    output_min_value = None if raw_min_value is None else round_if_needed(float(raw_min_value))
+    output_max_value = None if raw_max_value is None else round_if_needed(float(raw_max_value))
+    hist_min_value = float(hist_min_value or 0.0)
+    hist_max_value = float(hist_max_value or 0.0)
+    zero_count = int(zero_count or 0)
+    source_sql = f"""
+    SELECT {col} AS v
+    FROM {table_quoted}
+    WHERE {col} IS NOT NULL
+      AND NOT isnan({col})
+    """
+    temp_name = f"tmp_{context}_{column_name}_v"
+    source_table = quote_identifier(temp_name)
+    conn.execute(f"DROP TABLE IF EXISTS {source_table}")
+    conn.execute(f"CREATE TEMP TABLE {source_table} AS {source_sql}")
+    try:
+        bin_edges, bin_counts, pass_values = iterative_trim(
+            conn,
+            source_table,
+            hist_min_value,
+            hist_max_value,
+            trim_lower,
+        )
+
+        first_pass_min_value, first_pass_max_value = (
+            pass_values[0] if pass_values else (hist_min_value, hist_max_value)
+        )
+        second_pass_min_value, second_pass_max_value = (
+            pass_values[1] if pass_values else (hist_min_value, hist_max_value)
+        )
+
+        below_chart_min_value_count = 0
+        if trim_lower:
+            below_chart_min_value_count = int(
+                conn.execute(
+                    f"""
+                    SELECT COUNT(*)
+                    FROM {source_table}
+                    WHERE v > 0.0 AND v < {second_pass_min_value:.16f}
+                    """
+                )
+                .fetchone()[0]
+                or 0
+            )
+        above_chart_max_value_count = int(
+            conn.execute(
+                f"""
+                SELECT COUNT(*)
+                FROM {source_table}
+                WHERE v > {second_pass_max_value:.16f}
+                """
+            )
+            .fetchone()[0]
+            or 0
+        )
+        profile = {
+            "column_name": column_name,
+            "min_value": output_min_value,
+            "max_value": output_max_value,
+            "zero_count": zero_count,
+            "first_pass_max_value": round_if_needed(float(first_pass_max_value)),
+            "second_pass_max_value": round_if_needed(float(second_pass_max_value)),
+            "bin_edges": [round_if_needed(float(value)) for value in bin_edges],
+            "bin_counts": bin_counts,
+            "bin_percentages": [percentage(count, total_rows) for count in bin_counts],
+            "above_chart_max_value_count": int(above_chart_max_value_count or 0),
+            "range_count": len(bin_counts) + 3,
+        }
+        if trim_lower:
+            profile["first_pass_min_value"] = round_if_needed(float(first_pass_min_value))
+            profile["second_pass_min_value"] = round_if_needed(float(second_pass_min_value))
+            profile["below_chart_min_value_count"] = int(below_chart_min_value_count or 0)
+        return profile
+    finally:
+        conn.execute(f"DROP TABLE IF EXISTS {source_table}")
 
 
 def iterative_trim(
     conn,
-    sql_string,
+    table_1_column,
+    min_value,
     max_value,
-    no_zero_count: int,
-    *,
-    return_pass_values: bool = False,
+    trim_lower: bool,
 ):
-    max_value = float(max_value)
     bin_edges = []
     bin_counts = []
-    bin_percentages = []
     pass_values = []
 
-    for bin_count, threshold_percent in (
-        (FIRST_PASS_BIN_COUNT, FIRST_PASS_THRESHOLD_PERCENT),
-        (SECOND_PASS_BIN_COUNT, SECOND_PASS_THRESHOLD_PERCENT),
-    ):
+    for bin_count, threshold_percent in UPPER_BOUND_PASSES:
+        threshold_ratio = threshold_percent / 100.0
         while True:
-            bin_edges, bin_counts = build_histogram_counts(conn, sql_string, max_value, bin_count)
-            if not bin_counts or no_zero_count <= 0:
-                bin_percentages = [0.0 for _ in bin_counts]
+            current_bin_edges, current_bin_counts, current_total_count = build_current_histogram(
+                conn,
+                table_1_column,
+                min_value,
+                max_value,
+                bin_count,
+            )
+
+            if not current_bin_counts or current_total_count <= 0:
+                return min_value, max_value, bin_edges, bin_counts, pass_values
+
+            left_index = 0
+            right_index = len(current_bin_counts) - 1
+
+            if trim_lower:
+                while (
+                    left_index <= right_index
+                    and (current_bin_counts[left_index] / current_total_count) < threshold_ratio
+                ):
+                    left_index += 1
+
+            while (
+                right_index >= left_index
+                and (current_bin_counts[right_index] / current_total_count) < threshold_ratio
+            ):
+                right_index -= 1
+
+            needs_left_trim = trim_lower and left_index > 0
+            needs_right_trim = right_index < len(current_bin_counts) - 1
+            if not needs_left_trim and not needs_right_trim:
                 break
 
-            last_bin_percent = bin_counts[-1] / no_zero_count * 100
-            if last_bin_percent >= threshold_percent:
-                bin_percentages = [(qv / no_zero_count * 100) for qv in bin_counts]
-                break
+            if needs_left_trim:
+                next_min_value = float(current_bin_edges[left_index])
+            if needs_right_trim:
+                next_max_value = float(current_bin_edges[right_index + 1])
 
-            new_upper = trim_upper_bound(bin_edges, bin_counts, threshold_percent, no_zero_count)
-            if abs(max_value - new_upper) <= 1e-12:
-                bin_percentages = [(qv / no_zero_count * 100) for qv in bin_counts]
-                break
-            max_value = float(new_upper)
-        pass_values.append(max_value)
+            if (
+                (
+                    abs(min_value - next_min_value) <= 1e-12
+                    and abs(max_value - next_max_value) <= 1e-12
+                )
+                or next_max_value <= next_min_value
+            ):
+                return min_value, max_value, bin_edges, bin_counts, pass_values
 
-    if return_pass_values:
-        return max_value, bin_edges, bin_counts, bin_percentages, pass_values
-    return max_value, bin_edges, bin_counts, bin_percentages
+            min_value = next_min_value
+            max_value = next_max_value
 
 
-def build_histogram_counts(conn, sql_string: str, upper_bound: float, bin_count: int):
-    bin_edges = [i * (upper_bound / bin_count) for i in range(bin_count + 1)]
+        pass_values.append((min_value, max_value))
+
+    
+    bin_edges, bin_counts, _ = build_current_histogram(
+        conn,
+        table_1_column,
+        min_value,
+        max_value,
+        10,
+    )
+
+    return bin_edges, bin_counts, pass_values
+
+
+def build_current_histogram(
+    conn,
+    table_1_column,
+    min_value: float,
+    max_value: float,
+    bin_count: int,
+):
+    width = (max_value - min_value) / bin_count
+    bin_edges = [min_value + i * width for i in range(bin_count + 1)]
+    bin_edges[-1] = max_value
     bin_counts = [0] * bin_count
-    if upper_bound <= 0:
-        return bin_edges, bin_counts
+    if max_value <= 0 or width <= 0:
+        return bin_edges, bin_counts, 0
 
-    rows = conn.execute(
+    buckets_and_counts = conn.execute(
         f"""
         SELECT
             LEAST(
                 {bin_count},
-                GREATEST(1, CAST(CEIL(v / {upper_bound:.16f} * {bin_count}) AS INTEGER))
+                GREATEST(1, FLOOR((v - {min_value:.16f}) / {width:.16f}) + 1)
             ) AS b,
             COUNT(*) AS c
-        FROM {sql_string}
-        WHERE v > 0.0
-          AND v <= {upper_bound:.16f}
+        FROM {table_1_column}
+        WHERE v >= {min_value:.16f}
+          AND v <= {max_value:.16f}
         GROUP BY b
+        ORDER BY b
         """
     ).fetchall()
-    for bucket, count in rows:
+
+    
+    for bucket, count in buckets_and_counts:
         bucket_index = int(bucket) - 1
         if 0 <= bucket_index < bin_count:
             bin_counts[bucket_index] = int(count)
-    return bin_edges, bin_counts
+    return bin_edges, bin_counts, sum(bin_counts)
 
 
-def trim_upper_bound(bin_edges, bin_counts, threshold_percent, no_zero_count: int):
-    if len(bin_counts) == 0 or no_zero_count <= 0:
-        return float(bin_edges[-1])
-    keep_index = -1
-    for i in range(len(bin_counts) - 1, -1, -1):
-        if bin_counts[i] / no_zero_count * 100 >= threshold_percent:
-            keep_index = i
-            break
-    if keep_index == -1:
-        keep_index = 0
-    return float(bin_edges[keep_index + 1])
+

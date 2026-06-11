@@ -21,10 +21,11 @@ TAXI_STEP_DIRS = {
     "02": "02_low_duplicates",
     "03": "03_high_duplicates",
     "04": "04_payments",
-    "05": "05_before_business_rules",
-    "06": "06_after_business_rules",
-    "07": "07_before_upper_bounds",
-    "08": "08_after_upper_bounds",
+    "05": "05_aggregate_columns",
+    "06": "06_before_business_rules",
+    "07": "07_after_business_rules",
+    "08": "08_before_upper_bounds",
+    "09": "09_after_upper_bounds",
 }
 
 WEATHER_STEP_DIRS = {

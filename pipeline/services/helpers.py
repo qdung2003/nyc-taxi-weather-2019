@@ -1,8 +1,8 @@
-import csv
-import json
+import csv, shutil, json
 from decimal import Decimal
 from pathlib import Path
 from typing import Any
+from pipeline.constants.columns import AGGREGATE_COLUMNS
 
 
 
@@ -52,56 +52,7 @@ def is_schema_type_match(parquet_type: str | None, database_type: str | None) ->
     )
 
 
-def ordered_fieldnames(rows: list[dict[str, Any]]) -> list[str]:
-    preferred = [
-        "check",
-        "column_name",
-        "month",
-        "payment_type",
-        "key",
-        "value",
-        "count",
-        "percentage",
-        "month_count",
-        "month_percentage",
-        "bin_edge",
-        "bin_count",
-        "bin_percentage",
-    ]
-    fieldnames = [key for key in preferred if any(key in row for row in rows)]
-    for row in rows:
-        for key in row:
-            if key not in fieldnames:
-                fieldnames.append(key)
-    return fieldnames
-
-
-def write_csv(path: Path, rows: list[dict[str, Any]], *, preserve_header_underscores: bool = True) -> None:
-    if not rows:
-        return
-    path.parent.mkdir(parents=True, exist_ok=True)
-    fieldnames = ordered_fieldnames(rows)
-    output_fieldnames = (
-        fieldnames
-        if preserve_header_underscores
-        else [fieldname.replace("_", " ") for fieldname in fieldnames]
-    )
-    output_rows = [
-        {
-            output_fieldname: "null" if fieldname in row and row[fieldname] is None else row.get(fieldname)
-            for fieldname, output_fieldname in zip(fieldnames, output_fieldnames)
-        }
-        for row in rows
-    ]
-    with path.open("w", encoding="utf-8", newline="") as file:
-        writer = csv.DictWriter(file, fieldnames=output_fieldnames, extrasaction="ignore")
-        writer.writeheader()
-        writer.writerows(output_rows)
-
-
 def reset_csv_dir(path: Path) -> None:
-    import shutil
-
     if path.exists():
         shutil.rmtree(path)
     path.mkdir(parents=True, exist_ok=True)
@@ -130,6 +81,62 @@ def write_metadata_csv(
         for key, value in zip(keys, values)
     ]
     write_csv(output_dir / "metadata.csv", rows, preserve_header_underscores=True)
+
+
+def write_csv(path: Path, rows: list[dict[str, Any]], *, preserve_header_underscores: bool = True) -> None:
+    if not rows:
+        return
+    path.parent.mkdir(parents=True, exist_ok=True)
+    fieldnames = ordered_fieldnames(rows)
+    output_fieldnames = (
+        fieldnames
+        if preserve_header_underscores
+        else [fieldname.replace("_", " ") for fieldname in fieldnames]
+    )
+    output_rows = [
+        {
+            output_fieldname: "null" if fieldname in row and row[fieldname] is None else row.get(fieldname)
+            for fieldname, output_fieldname in zip(fieldnames, output_fieldnames)
+        }
+        for row in rows
+    ]
+    with path.open("w", encoding="utf-8", newline="") as file:
+        writer = csv.DictWriter(file, fieldnames=output_fieldnames, extrasaction="ignore")
+        writer.writeheader()
+        writer.writerows(output_rows)
+
+
+
+
+def ordered_fieldnames(rows: list[dict[str, Any]]) -> list[str]:
+    preferred = [
+        "check",
+        "column_name",
+        "month",
+        "payment_type",
+        "key",
+        "value",
+        "count",
+        "percentage",
+        "month_count",
+        "month_percentage",
+        "bin_edge",
+        "bin_count",
+        "bin_percentage",
+    ]
+    fieldnames = [key for key in preferred if any(key in row for row in rows)]
+    for row in rows:
+        for key in row:
+            if key not in fieldnames:
+                fieldnames.append(key)
+    return fieldnames
+
+
+
+
+
+
+
 
 
 def write_low_unique_csvs(output_dir: Path, rows: list[dict[str, Any]]) -> None:
@@ -212,16 +219,21 @@ def write_high_unique_csvs(
                 )
         elif row.get("bin_edges") or row.get("bin_counts") or row.get("bin_percentages"):
             numeric_rows.append(common)
-            for bin_edge, bin_count, bin_percentage in zip(
-                row.get("bin_edges", []),
-                row.get("bin_counts", []),
-                row.get("bin_percentages", []),
-            ):
+            bin_edges = row.get("bin_edges", [])
+            bin_counts = row.get("bin_counts", [])
+            bin_percentages = row.get("bin_percentages", [])
+            use_full_bin_edges = (
+                column_name in AGGREGATE_COLUMNS
+                and len(bin_edges) == len(bin_counts) + 1
+                and len(bin_edges) == len(bin_percentages) + 1
+            )
+            edge_values = bin_edges if use_full_bin_edges else bin_edges[:len(bin_counts)]
+            for index, bin_edge in enumerate(edge_values):
                 numeric_array_row = {
                     "column_name": column_name,
                     "bin_edge": bin_edge,
-                    "bin_count": bin_count,
-                    "bin_percentage": bin_percentage,
+                    "bin_count": bin_counts[index] if index < len(bin_counts) else None,
+                    "bin_percentage": bin_percentages[index] if index < len(bin_percentages) else None,
                 }
                 numeric_array_rows.append(numeric_array_row)
         else:
@@ -235,6 +247,42 @@ def write_high_unique_csvs(
     if numeric_rows:
         write_csv(output_dir / f"{base_name}_columns_numeric.csv", numeric_rows)
         write_csv(output_dir / f"{base_name}_columns_numeric_array.csv", numeric_array_rows)
+
+
+def write_aggregate_columns_csvs(output_dir: Path, rows: list[dict[str, Any]]) -> None:
+    column_rows = []
+    array_rows = []
+    for row in rows:
+        column_name = row.get("column_name")
+        column_rows.append(
+            {
+                "column_name": column_name,
+                "data_type": row.get("data_type"),
+                "valid_type_percent": row.get("valid_type_percent"),
+                "min_value": row.get("min_value"),
+                "negative_count": row.get("negative_count"),
+                "zero_count": row.get("zero_count"),
+                "chart_max_value": row.get("chart_max_value"),
+                "above_chart_max_value_count": row.get("above_chart_max_value_count"),
+                "max_value": row.get("max_value"),
+                "range_count": row.get("range_count"),
+            }
+        )
+        for bin_edge, bin_count, bin_percentage in zip(
+            row.get("bin_edges", []),
+            row.get("bin_counts", []),
+            row.get("bin_percentages", []),
+        ):
+            array_rows.append(
+                {
+                    "column_name": column_name,
+                    "bin_edge": bin_edge,
+                    "bin_count": bin_count,
+                    "bin_percentage": bin_percentage,
+                }
+            )
+    write_csv(output_dir / "aggregate_columns.csv", column_rows)
+    write_csv(output_dir / "aggregate_columns_array.csv", array_rows)
 
 
 def dumps_json_compact(

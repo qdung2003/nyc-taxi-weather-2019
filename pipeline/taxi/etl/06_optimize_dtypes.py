@@ -1,11 +1,11 @@
 from pipeline.services.queries import run_with_conn, ensure_table_exists
-from pipeline.constants.modules import ETL04_UPPER_BOUNDS
+from pipeline.constants.modules import ETL05_UPPER_BOUNDS
 from pipeline.constants.tables import TABLE_TAXI_CLEAN
-from pipeline.constants.tmp_tables import TMP_TAXI04
+from pipeline.constants.tmp_tables import TMP_TAXI05
 
 
-def create_etl05_optimize_dtypes(conn) -> None:
-    ensure_table_exists(conn, TMP_TAXI04, ETL04_UPPER_BOUNDS.create_etl04_upper_bounds)
+def create_etl06_optimize_dtypes(conn) -> None:
+    ensure_table_exists(conn, TMP_TAXI05, ETL05_UPPER_BOUNDS.create_etl05_upper_bounds)
 
     print(f"Creating table '{TABLE_TAXI_CLEAN}'...")
     conn.execute(f'DROP TABLE IF EXISTS "{TABLE_TAXI_CLEAN}"')
@@ -36,14 +36,18 @@ def create_etl05_optimize_dtypes(conn) -> None:
             CAST(tolls_amount AS FLOAT) AS tolls_amount,
             CAST(improvement_surcharge AS FLOAT) AS improvement_surcharge,
             CAST(total_amount AS FLOAT) AS total_amount,
-            CAST(congestion_surcharge AS FLOAT) AS congestion_surcharge
-        FROM "{TMP_TAXI04}"
+            CAST(congestion_surcharge AS FLOAT) AS congestion_surcharge,
+            CAST(trip_duration AS FLOAT) AS trip_duration,
+            CAST(average_speed AS FLOAT) AS average_speed,
+            CAST(fare_per_mile AS FLOAT) AS fare_per_mile,
+            CAST(fare_per_minute AS FLOAT) AS fare_per_minute
+        FROM "{TMP_TAXI05}"
         """
     )
 
 
 def main(conn):
-    create_etl05_optimize_dtypes(conn)
+    create_etl06_optimize_dtypes(conn)
     row_count = conn.execute(f'SELECT count(*) FROM "{TABLE_TAXI_CLEAN}"').fetchone()[0]
 
     print("-" * 30)
@@ -53,8 +57,6 @@ def main(conn):
 
 if __name__ == "__main__":
     run_with_conn(main)
-
-
 
 
 

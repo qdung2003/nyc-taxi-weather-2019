@@ -1,17 +1,16 @@
 from pipeline.services.queries import ensure_table_exists, run_with_conn
-from pipeline.constants.tables import TABLE_TAXI_RAW
 from pipeline.constants.times import YEAR
-from pipeline.constants.tmp_tables import TMP_TAXI03
-from pipeline.constants.modules import ETL02_INGEST
+from pipeline.constants.tmp_tables import TMP_TAXI03, TMP_TAXI04
+from pipeline.constants.modules import ETL03_AGGREGATE
 
 
-def create_etl03_business_rules(conn) -> None:
-    ensure_table_exists(conn, TABLE_TAXI_RAW, ETL02_INGEST.create_taxi_raw_table)
+def create_etl04_business_rules(conn) -> None:
+    ensure_table_exists(conn, TMP_TAXI03, ETL03_AGGREGATE.create_etl03_add_aggregate_columns)
     print("Applying business rules...")
-    conn.execute(f'DROP TABLE IF EXISTS "{TMP_TAXI03}"')
+    conn.execute(f'DROP TABLE IF EXISTS "{TMP_TAXI04}"')
     conn.execute(
         f"""
-        CREATE TEMP TABLE "{TMP_TAXI03}" AS
+        CREATE TEMP TABLE "{TMP_TAXI04}" AS
         SELECT
             VendorID,
             tpep_pickup_datetime,
@@ -23,15 +22,19 @@ def create_etl03_business_rules(conn) -> None:
             PULocationID,
             DOLocationID,
             payment_type,
-            fare_amount,
-            extra,
+            CASE WHEN extra >= 2.5 THEN fare_amount + 2.5 ELSE fare_amount END AS fare_amount,
+            CASE WHEN extra >= 2.5 THEN extra - 2.5 ELSE extra END AS extra,
             mta_tax,
             tip_amount,
             tolls_amount,
             improvement_surcharge,
             total_amount,
-            congestion_surcharge
-        FROM "{TABLE_TAXI_RAW}"
+            COALESCE(congestion_surcharge, 0.0) AS congestion_surcharge,
+            trip_duration,
+            average_speed,
+            fare_per_mile,
+            fare_per_minute
+        FROM "{TMP_TAXI03}"
         WHERE
             tpep_pickup_datetime >= TIMESTAMP '{YEAR}-01-01'
             AND tpep_pickup_datetime < TIMESTAMP '{YEAR + 1}-01-01'
@@ -45,7 +48,10 @@ def create_etl03_business_rules(conn) -> None:
             AND PULocationID BETWEEN 1 AND 263
             AND DOLocationID BETWEEN 1 AND 263
             AND payment_type BETWEEN 1 AND 4
-            AND COALESCE(congestion_surcharge, 0.0) IN (0.0, 0.75, 2.5)
+            AND (
+                congestion_surcharge IS NULL
+                OR congestion_surcharge IN (0.0, 0.75, 2.5)
+            )
             AND trip_distance > 0
             AND (CASE WHEN extra >= 2.5 THEN fare_amount + 2.5 ELSE fare_amount END) > 0
             AND (CASE WHEN extra >= 2.5 THEN extra - 2.5 ELSE extra END) IN (0.0, 0.5, 1.0)
@@ -60,17 +66,17 @@ def create_etl03_business_rules(conn) -> None:
 
 
 def main(conn):
-    create_etl03_business_rules(conn)
+    create_etl04_business_rules(conn)
 
-    input_rows = int(conn.execute(f'SELECT COUNT(*) FROM "{TABLE_TAXI_RAW}"').fetchone()[0] or 0)
-    output_rows = int(conn.execute(f'SELECT COUNT(*) FROM "{TMP_TAXI03}"').fetchone()[0] or 0)
+    input_rows = int(conn.execute(f'SELECT COUNT(*) FROM "{TMP_TAXI03}"').fetchone()[0] or 0)
+    output_rows = int(conn.execute(f'SELECT COUNT(*) FROM "{TMP_TAXI04}"').fetchone()[0] or 0)
     
     
     removed = input_rows - output_rows
     removed_pct = (removed / input_rows * 100) if input_rows else 0.0
 
     print("-" * 30)
-    print("Step taxi_etl_03_business_rules_cte complete.")
+    print("Step taxi_etl_04_apply_business_rules complete.")
     print(f"Input rows:   {input_rows:,}")
     print(f"Output rows:  {output_rows:,}")
     print(f"Rows removed: {removed:,} ({removed_pct:.2f}%)")

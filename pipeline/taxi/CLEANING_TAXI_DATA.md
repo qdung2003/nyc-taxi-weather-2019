@@ -31,7 +31,7 @@ The 2019 data is referenced against official TLC documentation:
 | 14 | `tolls_amount` | `[0, 6.45]` | Keep non-negative values and cap by the upper bound. | Decision |
 | 15 | `total_amount` | `[0, 77.07]` | Keep non-negative values and cap by the upper bound. | Decision |
 
-Upper bounds are read from `second_pass_value` in `data/eda_results/taxi/07_before_upper_bounds/column_bins.csv`; if that file is missing or invalid, ETL 04 computes the bounds directly from `tmp_taxi03`.
+Histogram-threshold bounds are computed from `tmp_taxi04` in ETL 05 and written by EDA 08 to `data/eda_results/taxi/08_before_upper_bounds/column_bins.csv`. The upper side is stored in `second_pass_max_value`, and the lower side is stored in `second_pass_min_value`.
 
 ---
 

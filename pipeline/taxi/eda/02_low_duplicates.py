@@ -45,60 +45,65 @@ def main(conn):
                 MAX_UNIQUE_VALUES,
             )
         )
+    
+    valid_type_percents = calculate_valid_type_percentages(
+        conn,
+        taxi_raw_quoted,
+        column_names,
+        data_types,
+        row_count,
+    )
 
 
-    low_cardinality_column_names = []
-    low_cardinality_data_types = []
-    high_cardinality_column_names = []
-    high_cardinality_data_types = []
+    low_unique_column_names = []
+    low_unique_data_types = []
+    low_unique_unique_counts = []
+    low_unique_valid_type_percents = []
+    high_unique_column_names = []
+    high_unique_data_types = []
+    high_unique_valid_type_percents = []
 
 
-    for column_name, data_type, unique_count in zip(column_names, data_types, unique_counts):
+    for column_name, data_type, unique_count, valid_type_percent in zip(
+        column_names,
+        data_types,
+        unique_counts,
+        valid_type_percents,
+    ):
         if unique_count <= MAX_UNIQUE_VALUES:
-            low_cardinality_column_names.append(column_name)
-            low_cardinality_data_types.append(data_type)
+            low_unique_column_names.append(column_name)
+            low_unique_data_types.append(data_type)
+            low_unique_unique_counts.append(unique_count)
+            low_unique_valid_type_percents.append(valid_type_percent)
         else:
-            high_cardinality_column_names.append(column_name)
-            high_cardinality_data_types.append(data_type)
+            high_unique_column_names.append(column_name)
+            high_unique_data_types.append(data_type)
+            high_unique_valid_type_percents.append(valid_type_percent)
 
 
     print(
         "Phase 2/3: Counting values for low-cardinality columns "
-        f"({len(low_cardinality_column_names)}/{len(column_names)})..."
+        f"({len(low_unique_column_names)}/{len(column_names)})..."
     )
     
-    low_valid_type_percentages = calculate_valid_type_percentages(
-        conn,
-        taxi_raw_quoted,
-        low_cardinality_column_names,
-        low_cardinality_data_types,
-        row_count,
-    )
     low_unique_columns = build_low_unique_columns(
         conn,
         taxi_raw_quoted,
-        low_cardinality_column_names,
-        low_cardinality_data_types,
-        low_valid_type_percentages,
+        low_unique_column_names,
+        low_unique_data_types,
+        low_unique_unique_counts,
+        low_unique_valid_type_percents,
         row_count,
     )
 
 
     high_unique_columns = []
     
-    if high_cardinality_column_names:
-        high_valid_type_percentages = calculate_valid_type_percentages(
-            conn,
-            taxi_raw_quoted,
-            high_cardinality_column_names,
-            high_cardinality_data_types,
-            row_count,
-        )
-
+    if high_unique_column_names:
         for column_name, data_type, valid_type_percent in zip(
-            high_cardinality_column_names,
-            high_cardinality_data_types,
-            high_valid_type_percentages,
+            high_unique_column_names,
+            high_unique_data_types,
+            high_unique_valid_type_percents,
         ):
             high_unique_columns.append(
                 {
@@ -137,12 +142,6 @@ def main(conn):
 
 if __name__ == "__main__":
     run_with_conn(main)
-
-
-
-
-
-
 
 
 

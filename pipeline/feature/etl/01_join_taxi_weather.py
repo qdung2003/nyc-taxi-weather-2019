@@ -9,10 +9,10 @@ from pipeline.services.queries import ensure_table_exists, quote_identifier, run
 
 
 def create_taxi_weather_features(conn) -> None:
-    taxi_optimize = importlib.import_module("pipeline.taxi.etl.05_optimize_dtypes")
+    taxi_optimize = importlib.import_module("pipeline.taxi.etl.06_optimize_dtypes")
     weather_optimize = importlib.import_module("pipeline.weather.etl.04_optimize_dtypes")
 
-    ensure_table_exists(conn, TABLE_TAXI_CLEAN, taxi_optimize.create_etl05_optimize_dtypes)
+    ensure_table_exists(conn, TABLE_TAXI_CLEAN, taxi_optimize.create_etl06_optimize_dtypes)
     ensure_table_exists(conn, TABLE_WEATHER_CLEAN, weather_optimize.create_weather04_optimize_dtypes)
 
     taxi_clean = quote_identifier(TABLE_TAXI_CLEAN)

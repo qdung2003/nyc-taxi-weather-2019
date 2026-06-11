@@ -70,6 +70,16 @@ def parse_list_value(parts: list[str]) -> tuple[str, str, str | None]:
     return domain, stage, start_step
 
 
+def parse_run_value(parts: list[str]) -> tuple[str, str, str]:
+    if len(parts) != 3:
+        raise SystemExit("Invalid --run format. Use: --run <taxi|weather|feature> <etl_start_step> <eda_start_step>")
+
+    domain = validate_domain(parts[0], "--run")
+    etl_start = validate_step(parts[1], "ETL start step in --run")
+    eda_start = validate_step(parts[2], "EDA start step in --run")
+    return domain, etl_start, eda_start
+
+
 # ===== Script Discovery =====
 def get_scripts(domain: str, stage: str) -> list[tuple[str, Path]]:
     script_dir = SCRIPT_DIRS.get((domain, stage))
@@ -202,6 +212,16 @@ def handle_domain(domain: str) -> None:
         run_domain_pipeline(domain, conn)
 
 
+def handle_run(parts: list[str]) -> None:
+    domain, etl_start, eda_start = parse_run_value(parts)
+    with managed_connection() as conn:
+        print(f"Starting {domain.upper()} ETL from step {etl_start}...")
+        handle_list([domain, "etl", etl_start], shared_conn=conn)
+        print(f"Starting {domain.upper()} EDA from step {eda_start}...")
+        handle_list([domain, "eda", eda_start], shared_conn=conn)
+        print(f"{domain.capitalize()} staged run complete.")
+
+
 def handle_all() -> None:
     print("Executing ALL flows: Taxi & Weather first, then Feature...")
     with ThreadPoolExecutor(max_workers=2) as executor:
@@ -228,9 +248,12 @@ def build_parser() -> argparse.ArgumentParser:
             "  python main.py --only taxi etl 01\n"
             "  python main.py --list taxi etl\n"
             "  python main.py --list taxi eda 01\n"
+            "  python main.py --run taxi 03 05\n"
+            "  python main.py --run weather 03 04\n"
             "  python main.py --list feature etl\n"
             "  python main.py --taxi\n"
             "  python main.py --weather\n"
+            "  python main.py --feature\n"
             "  python main.py --all\n"
         ),
     )
@@ -239,8 +262,10 @@ def build_parser() -> argparse.ArgumentParser:
     group = parser.add_mutually_exclusive_group(required=False)
     group.add_argument("--only", nargs="+", metavar="ARGS", help="Run one or many scripts: <taxi|weather|feature> <etl|eda> <NN> [NN ...].")
     group.add_argument("--list", nargs="+", metavar="ARGS", help="Run all scripts in group: <taxi|weather|feature> <etl|eda> [NN].")
+    group.add_argument("--run", nargs=3, metavar=("DOMAIN", "ETL_STEP", "EDA_STEP"), help="Run DOMAIN ETL from ETL_STEP, then DOMAIN EDA from EDA_STEP, in one pass.")
     group.add_argument("--taxi", action="store_true", help="Run Taxi ETL then Taxi EDA.")
     group.add_argument("--weather", action="store_true", help="Run Weather ETL then Weather EDA.")
+    group.add_argument("--feature", action="store_true", help="Run Feature ETL then Feature EDA.")
     group.add_argument("--all", action="store_true", help="Run Taxi and Weather pipelines first, then Feature.")
     return parser
 
@@ -255,14 +280,18 @@ def main() -> None:
         handle_only(args.only)
     elif args.list:
         handle_list(args.list)
+    elif args.run:
+        handle_run(args.run)
     elif args.taxi:
         handle_domain("taxi")
     elif args.weather:
         handle_domain("weather")
+    elif args.feature:
+        handle_domain("feature")
     elif args.all:
         handle_all()
     else:
-        parser.error("Provide one of: dashboard, --only, --list, --taxi, --weather, or --all.")
+        parser.error("Provide one of: dashboard, --only, --list, --run, --taxi, --weather, --feature, or --all.")
 
 
 if __name__ == "__main__":

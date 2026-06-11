@@ -1,7 +1,7 @@
 (function (D) {
   const NS = 'http://www.w3.org/2000/svg';
   const KPI_PCT_PATTERN = /(percentage|percent|_pct)$/i;
-  const PROFILE_KPI_STEPS = ['02', '03', '05', '06', '07', '08'];
+  const PROFILE_KPI_STEPS = ['02', '03', '05', '06', '07', '08', '09'];
   const PROFILE_KPI_ORDER = {
     '02': ['warehouse_database_path', 'warehouse_db_path', 'table', 'raw_table', 'row_count', 'max_unique_values', 'low_unique_column_count', 'high_unique_column_count'],
     '03': ['tail_ratio', 'positive_bin_count', 'high_unique_column_count'],
@@ -9,6 +9,7 @@
     '06': ['row_count', 'low_unique_column_count', 'high_unique_column_count'],
     '07': ['first_pass_bin_count', 'second_pass_bin_count', 'first_pass_threshold_percent', 'second_pass_threshold_percent', 'column_count'],
     '08': ['row_count', 'low_unique_column_count', 'high_unique_column_count'],
+    '09': ['row_count', 'low_unique_column_count', 'high_unique_column_count'],
   };
   const LOCATION_COLUMNS = new Set(['PULocationID', 'DOLocationID']);
   const MONTH_LABELS = ['Jan', 'Feb', 'Mar', 'Apr', 'May', 'Jun', 'Jul', 'Aug', 'Sep', 'Oct', 'Nov', 'Dec'];
@@ -76,25 +77,73 @@
     container.querySelectorAll(`.${breakClass}`).forEach((el) => el.remove());
     const items = Array.from(container.querySelectorAll(itemSelector));
     if (items.length <= 2) return;
-    const firstTop = items[0].offsetTop;
-    const wraps = items.some((item, index) => index > 0 && item.offsetTop > firstTop);
-    if (!wraps) return;
-    const totalWidth = items.reduce((sum, item) => sum + item.offsetWidth, 0);
-    let runningWidth = 0;
-    let firstRowCount = Math.ceil(items.length / 2);
-    for (let i = 0; i < items.length - 1; i += 1) {
-      runningWidth += items[i].offsetWidth;
-      if (runningWidth >= totalWidth / 2) {
-        const prevDiff = i > 0 ? Math.abs((runningWidth - items[i].offsetWidth) - totalWidth / 2) : Infinity;
-        const currDiff = Math.abs(runningWidth - totalWidth / 2);
-        firstRowCount = currDiff <= prevDiff ? i + 1 : i;
-        break;
+
+    const rowTops = [];
+    items.forEach((item) => {
+      const top = item.offsetTop;
+      if (!rowTops.some((value) => Math.abs(value - top) <= 1)) {
+        rowTops.push(top);
+      }
+    });
+    const rowCount = rowTops.length;
+    if (rowCount <= 1 || rowCount >= items.length) return;
+
+    const styles = window.getComputedStyle(container);
+    const gapValue = parseFloat(styles.columnGap || styles.gap || '0');
+    const gap = Number.isFinite(gapValue) ? gapValue : 0;
+    const widths = items.map((item) => item.offsetWidth);
+    const prefixWidths = [0];
+    widths.forEach((width, index) => {
+      prefixWidths[index + 1] = prefixWidths[index] + width;
+    });
+
+    function rowWidth(start, end) {
+      const count = end - start;
+      if (count <= 0) return 0;
+      return (prefixWidths[end] - prefixWidths[start]) + gap * Math.max(0, count - 1);
+    }
+
+    const totalWidth = rowWidth(0, items.length);
+    const targetWidth = totalWidth / rowCount;
+    const dp = Array.from({ length: rowCount + 1 }, () => Array(items.length + 1).fill(Infinity));
+    const splitAt = Array.from({ length: rowCount + 1 }, () => Array(items.length + 1).fill(-1));
+    dp[0][0] = 0;
+
+    for (let row = 1; row <= rowCount; row += 1) {
+      for (let end = row; end <= items.length; end += 1) {
+        const minStart = row - 1;
+        const maxStart = end - 1;
+        for (let start = minStart; start <= maxStart; start += 1) {
+          if (!Number.isFinite(dp[row - 1][start])) continue;
+          const width = rowWidth(start, end);
+          const cost = dp[row - 1][start] + ((width - targetWidth) ** 2);
+          if (cost < dp[row][end]) {
+            dp[row][end] = cost;
+            splitAt[row][end] = start;
+          }
+        }
       }
     }
-    firstRowCount = Math.max(1, Math.min(items.length - 1, firstRowCount));
-    const br = document.createElement('span');
-    br.className = breakClass;
-    container.insertBefore(br, items[firstRowCount]);
+
+    if (!Number.isFinite(dp[rowCount][items.length])) return;
+
+    const breaks = [];
+    let row = rowCount;
+    let end = items.length;
+    while (row > 0) {
+      const start = splitAt[row][end];
+      if (start <= 0) break;
+      breaks.push(start);
+      end = start;
+      row -= 1;
+    }
+
+    breaks.reverse().forEach((index) => {
+      if (index <= 0 || index >= items.length) return;
+      const br = document.createElement('span');
+      br.className = breakClass;
+      container.insertBefore(br, items[index]);
+    });
   }
 
   function renderRows(tbody, rows, toHtml) {

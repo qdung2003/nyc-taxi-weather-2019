@@ -9,30 +9,31 @@ from pipeline.services.queries import (
     quote_identifier,
     run_with_conn,
 )
-from pipeline.constants.modules import ETL03_BUSINESS
+
+from pipeline.constants.modules import ETL05_UPPER_BOUNDS
+from pipeline.constants.tmp_tables import TMP_TAXI05
 from pipeline.constants.paths import TAXI_EDA_RESULTS_DIR
-from pipeline.constants.tmp_tables import TMP_TAXI03
 
 
 TAXI_EDA_RESULTS_DIR.mkdir(parents=True, exist_ok=True)
-output_file = TAXI_EDA_RESULTS_DIR / "06_after_business_rules"
+output_file = TAXI_EDA_RESULTS_DIR / "09_after_upper_bounds"
 
 
 def main(conn):
-    ensure_table_exists(conn, TMP_TAXI03, ETL03_BUSINESS.create_etl03_business_rules)
-    tmp_taxi03_quoted = quote_identifier(TMP_TAXI03)
+    ensure_table_exists(conn, TMP_TAXI05, ETL05_UPPER_BOUNDS.create_etl05_upper_bounds)
+    tmp_taxi05_quoted = quote_identifier(TMP_TAXI05)
 
     row_count = conn.execute(
-        f"SELECT count(*) FROM {tmp_taxi03_quoted}"
+        f"SELECT count(*) FROM {tmp_taxi05_quoted}"
     ).fetchone()[0]
 
-    column_type_rows = conn.execute(f"DESCRIBE {tmp_taxi03_quoted}").fetchall()
+    column_type_rows = conn.execute(f"DESCRIBE {tmp_taxi05_quoted}").fetchall()
     column_names = [str(row[0]) for row in column_type_rows]
     low_unique_column_names, high_unique_column_names = get_column_groups(
         conn,
-        tmp_taxi03_quoted,
+        tmp_taxi05_quoted,
         column_names,
-        desc="EDA 06 - detecting column groups",
+        desc="EDA 09 - detecting column groups",
     )
 
     low_unique_data_types = get_column_data_types(
@@ -41,19 +42,19 @@ def main(conn):
     )
     low_unique_valid_type_percentages = calculate_valid_type_percentages(
         conn,
-        tmp_taxi03_quoted,
+        tmp_taxi05_quoted,
         low_unique_column_names,
         low_unique_data_types,
         row_count,
     )
     low_unique_columns = build_low_unique_columns(
         conn,
-        tmp_taxi03_quoted,
+        tmp_taxi05_quoted,
         low_unique_column_names,
         low_unique_data_types,
         low_unique_valid_type_percentages,
         row_count,
-        desc="EDA 06 - value counts",
+        desc="EDA 09 - value counts",
         leave=False,
     )
 
@@ -63,20 +64,20 @@ def main(conn):
     )
     high_unique_valid_type_percentages = calculate_valid_type_percentages(
         conn,
-        tmp_taxi03_quoted,
+        tmp_taxi05_quoted,
         high_unique_column_names,
         high_unique_data_types,
         row_count,
     )
     high_unique_columns = build_high_unique_columns(
         conn,
-        TMP_TAXI03,
+        TMP_TAXI05,
         high_unique_column_names,
         high_unique_data_types,
         high_unique_valid_type_percentages,
         row_count,
-        desc="EDA 06 - profiling high-duplicate columns",
-        temp_prefix="tmp_eda06",
+        desc="EDA 09 - profiling high-duplicate columns",
+        temp_prefix="tmp_eda09",
     )
 
     reset_csv_dir(output_file)
@@ -95,13 +96,11 @@ def main(conn):
     )
     write_low_unique_csvs(output_file, low_unique_columns)
     write_high_unique_csvs(output_file, high_unique_columns)
-    print(f"EDA 06 saved: {output_file.name}")
+    print(f"EDA 09 saved: {output_file.name}")
 
 
 if __name__ == "__main__":
     run_with_conn(main)
-
-
 
 
 

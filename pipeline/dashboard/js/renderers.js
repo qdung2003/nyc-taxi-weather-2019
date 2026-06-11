@@ -373,10 +373,12 @@ function render05(root, data) {
   const rulesHead = q(root, 'rulesHead');
   const rulesBody = q(root, 'rulesBody');
   const svg = q(root, 'chart');
+  const rulesTable = rulesBody?.closest('table');
   const ruleRemovedCount = (r) =>
     Number(r.exclusive_removed_count ?? r.exclusive_removed_row_count ?? r.removed_exclusive_rows ?? 0)
     + Number(r.shared_removed_count ?? r.shared_removed_row_count ?? r.removed_shared_rows ?? 0);
   const sortedRules = [...rules].sort((a, b) => ruleRemovedCount(b) - ruleRemovedCount(a));
+  let lockedColumnWidths = null;
 
   const headers = data.rules_headers || [
     'column_name',
@@ -389,6 +391,40 @@ function render05(root, data) {
     'shared_removed_percentage',
   ];
   renderHeadRow(rulesHead, headers);
+
+  function applyLockedColumnWidths() {
+    if (!lockedColumnWidths?.length || !rulesTable || !rulesHead || !rulesBody) return;
+    const headCells = Array.from(rulesHead.children);
+    const bodyRows = Array.from(rulesBody.querySelectorAll('tr'));
+
+    headCells.forEach((cell, index) => {
+      const width = lockedColumnWidths[index];
+      if (!width) return;
+      cell.dataset.lockedWidth = 'true';
+      cell.style.setProperty('--locked-col-width', `${width}px`);
+    });
+
+    bodyRows.forEach((row) => {
+      Array.from(row.children).forEach((cell, index) => {
+        const width = lockedColumnWidths[index];
+        if (!width) return;
+        cell.dataset.lockedWidth = 'true';
+        cell.style.setProperty('--locked-col-width', `${width}px`);
+      });
+    });
+  }
+
+  function captureColumnWidths() {
+    if (!rulesHead || lockedColumnWidths?.length) return;
+    const headCells = Array.from(rulesHead.children);
+    if (!headCells.length) return;
+    lockedColumnWidths = headCells.map((cell) => Math.ceil(cell.getBoundingClientRect().width));
+    if (lockedColumnWidths.every((width) => width > 0)) {
+      applyLockedColumnWidths();
+    } else {
+      lockedColumnWidths = null;
+    }
+  }
 
   function drawPage() {
     const totalPages = Math.max(1, Math.ceil(rules.length / pageSize));
@@ -406,6 +442,11 @@ function render05(root, data) {
         (r) =>
           `<tr><td><code>${esc(r.rule_name)}</code></td><td><code>${esc(r.column_name)}</code></td><td>${fmtInt(r.invalid_count ?? r.invalid_row_count)}</td><td>${fmtInt(r.exclusive_removed_count ?? r.exclusive_removed_row_count)}</td><td>${fmtInt(r.shared_removed_count ?? r.shared_removed_row_count)}</td><td>${fmtPct(r.invalid_percentage ?? r.invalid_row_percentage)}</td><td>${fmtPct(r.exclusive_removed_percentage)}</td><td>${fmtPct(r.shared_removed_percentage)}</td></tr>`,
       );
+      if (!lockedColumnWidths?.length) {
+        captureColumnWidths();
+      } else {
+        applyLockedColumnWidths();
+      }
     }
 
     const chartRows = items.map((r) => ({
@@ -451,7 +492,7 @@ function render07(root, data) {
         const left = hasFullEdges ? edges[i] : (i === 0 ? 0 : (edges[i - 1] ?? null));
         const right = hasFullEdges
           ? edges[i + 1]
-          : edges[i] ?? col.second_pass_value ?? col.second_pass_max_value ?? col.final_upper_bound ?? null;
+          : edges[i] ?? col.second_pass_max_value ?? col.final_upper_bound ?? null;
         return {
           index: i + 1,
           left,

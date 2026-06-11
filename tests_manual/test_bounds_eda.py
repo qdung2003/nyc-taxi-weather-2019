@@ -1,6 +1,4 @@
-from pipeline.constants.modules import ETL03_BUSINESS
 from pipeline.constants.paths import TAXI_EDA_RESULTS_DIR
-from pipeline.constants.tmp_tables import TMP_TAXI03
 from pipeline.constants.upper_bounds_settings import (
     FIRST_PASS_BIN_COUNT,
     FIRST_PASS_THRESHOLD_PERCENT,
@@ -8,25 +6,24 @@ from pipeline.constants.upper_bounds_settings import (
     SECOND_PASS_THRESHOLD_PERCENT,
 )
 from pipeline.services.helpers import reset_csv_dir, write_csv, write_metadata_csv
-from pipeline.services.queries import (
-    compute_upper_bounds,
-    ensure_table_exists,
-    quote_identifier,
-    run_with_conn,
-)
+from pipeline.services.queries import compute_upper_bounds, quote_identifier, run_with_conn
 
 
-TAXI_EDA_RESULTS_DIR.mkdir(parents=True, exist_ok=True)
-output_json = TAXI_EDA_RESULTS_DIR / "07_before_upper_bounds"
+TEST_TABLE = "taxi_upper_bounds_compare"
+output_dir = TAXI_EDA_RESULTS_DIR / "test_bounds_eda"
 
 
 def main(conn):
-    ensure_table_exists(conn, TMP_TAXI03, ETL03_BUSINESS.create_etl03_business_rules)
-    tmp_taxi03_quoted = quote_identifier(TMP_TAXI03)
     profiles = compute_upper_bounds(
         conn,
-        tmp_taxi03_quoted,
-        temp_prefix="tmp_eda07",
+        quote_identifier(TEST_TABLE),
+        column_names=[
+            "before_lower_bound",
+            "before_upper_bound",
+            "after_min_value",
+            "after_max_value",
+        ],
+        temp_prefix="tmp_test_bounds_eda",
     )
 
     columns = []
@@ -54,9 +51,9 @@ def main(conn):
                 }
             )
 
-    reset_csv_dir(output_json)
+    reset_csv_dir(output_dir)
     write_metadata_csv(
-        output_json,
+        output_dir,
         keys=[
             "first_pass_bin_count",
             "second_pass_bin_count",
@@ -72,9 +69,9 @@ def main(conn):
             len(profiles),
         ],
     )
-    write_csv(output_json / "column_bins.csv", columns)
-    write_csv(output_json / "column_bins_array.csv", array_rows)
-    print(f"EDA 07 saved: {output_json.name}")
+    write_csv(output_dir / "column_bins.csv", columns)
+    write_csv(output_dir / "column_bins_array.csv", array_rows)
+    print(f"Test EDA saved: {output_dir.name}")
 
 
 if __name__ == "__main__":

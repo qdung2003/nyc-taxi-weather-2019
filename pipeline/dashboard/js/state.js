@@ -79,6 +79,20 @@
     return payload;
   }
 
+  function parseAggregateStep(stepData) {
+    const payload = { ...metadataToObject(stepData.metadata) };
+    const aggregateColumns = columnarToRows(stepData.aggregate_columns);
+    const aggregateValues = groupRowsBy(columnarToRows(stepData.aggregate_columns_array), 'column_name');
+    aggregateColumns.forEach((column) => {
+      const items = aggregateValues[column.column_name] || [];
+      column.bin_edges = items.map((item) => item.bin_edge);
+      column.bin_counts = items.map((item) => item.bin_count);
+      column.bin_percentages = items.map((item) => item.bin_percentage);
+    });
+    if (aggregateColumns.length) payload.high_unique_columns = aggregateColumns;
+    return payload;
+  }
+
   function parseSchemaStep(stepData) {
     const filesRows = columnarToRows(stepData.files);
     return {
@@ -152,10 +166,11 @@
       '02': parseProfileStep,
       '03': parseProfileStep,
       '04': parsePaymentsStep,
-      '05': parseRulesStep,
-      '06': parseProfileStep,
-      '07': parseUpperBoundsStep,
-      '08': parseProfileStep,
+      '05': parseAggregateStep,
+      '06': parseRulesStep,
+      '07': parseProfileStep,
+      '08': parseUpperBoundsStep,
+      '09': parseProfileStep,
     },
     weather: {
       '01': parseSchemaStep,

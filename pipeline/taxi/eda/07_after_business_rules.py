@@ -9,18 +9,17 @@ from pipeline.services.queries import (
     quote_identifier,
     run_with_conn,
 )
-
-from pipeline.constants.modules import ETL04_UPPER_BOUNDS
-from pipeline.constants.tmp_tables import TMP_TAXI04
+from pipeline.constants.modules import ETL04_BUSINESS
 from pipeline.constants.paths import TAXI_EDA_RESULTS_DIR
+from pipeline.constants.tmp_tables import TMP_TAXI04
 
 
 TAXI_EDA_RESULTS_DIR.mkdir(parents=True, exist_ok=True)
-output_file = TAXI_EDA_RESULTS_DIR / "08_after_upper_bounds"
+output_file = TAXI_EDA_RESULTS_DIR / "07_after_business_rules"
 
 
 def main(conn):
-    ensure_table_exists(conn, TMP_TAXI04, ETL04_UPPER_BOUNDS.create_etl04_upper_bounds)
+    ensure_table_exists(conn, TMP_TAXI04, ETL04_BUSINESS.create_etl04_business_rules)
     tmp_taxi04_quoted = quote_identifier(TMP_TAXI04)
 
     row_count = conn.execute(
@@ -33,7 +32,7 @@ def main(conn):
         conn,
         tmp_taxi04_quoted,
         column_names,
-        desc="EDA 08 - detecting column groups",
+        desc="EDA 07 - detecting column groups",
     )
 
     low_unique_data_types = get_column_data_types(
@@ -54,7 +53,7 @@ def main(conn):
         low_unique_data_types,
         low_unique_valid_type_percentages,
         row_count,
-        desc="EDA 08 - value counts",
+        desc="EDA 07 - value counts",
         leave=False,
     )
 
@@ -76,8 +75,8 @@ def main(conn):
         high_unique_data_types,
         high_unique_valid_type_percentages,
         row_count,
-        desc="EDA 08 - profiling high-duplicate columns",
-        temp_prefix="tmp_eda08",
+        desc="EDA 07 - profiling high-duplicate columns",
+        temp_prefix="tmp_eda07",
     )
 
     reset_csv_dir(output_file)
@@ -96,11 +95,13 @@ def main(conn):
     )
     write_low_unique_csvs(output_file, low_unique_columns)
     write_high_unique_csvs(output_file, high_unique_columns)
-    print(f"EDA 08 saved: {output_file.name}")
+    print(f"EDA 07 saved: {output_file.name}")
 
 
 if __name__ == "__main__":
     run_with_conn(main)
+
+
 
 
 

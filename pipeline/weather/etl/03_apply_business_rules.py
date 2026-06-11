@@ -28,6 +28,7 @@ def create_weather03_business_rules(conn) -> None:
           AND "SNWD" >= 0
           AND "TMIN" > -459.67
           AND "TMAX" > -459.67
+          AND "TMIN" <= "TMAX"
         """
     )
 

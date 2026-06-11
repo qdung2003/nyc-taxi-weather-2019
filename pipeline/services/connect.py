@@ -1,9 +1,5 @@
-import os
+import os, duckdb, psutil
 from contextlib import contextmanager
-
-import duckdb
-import psutil
-
 from pipeline.constants.paths import DUCKDB_TEMP_DIR, WAREHOUSE_DB_FILE
 
 
