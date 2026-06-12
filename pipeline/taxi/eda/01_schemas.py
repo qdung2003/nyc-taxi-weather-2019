@@ -1,5 +1,4 @@
 import pyarrow.parquet as pq
-
 from pipeline.constants.modules import DOWNLOAD_YELLOW_TRIPDATA
 from pipeline.constants.paths import TAXI_EDA_RESULTS_DIR, TAXI_RAW_TEMP_DIR
 from pipeline.services.helpers import (
@@ -7,13 +6,12 @@ from pipeline.services.helpers import (
     is_schema_type_match,
     reset_csv_dir,
     write_csv,
-    write_metadata_csv,
 )
 from pipeline.services.queries import run_with_conn
 
 
 TAXI_EDA_RESULTS_DIR.mkdir(parents=True, exist_ok=True)
-output_file = TAXI_EDA_RESULTS_DIR / "01_schemas"
+output_dir = TAXI_EDA_RESULTS_DIR / "01_schemas"
 
 
 def main(conn):
@@ -72,62 +70,55 @@ def main(conn):
             mismatch_column_names.append(column_name)
             mismatch_parquet_types.append(column_type)
 
-    reset_csv_dir(output_file)
-    write_metadata_csv(
-        output_file,
-        keys=[
-            "files_directory",
-            "file_count",
-            "reference_file",
-            "column_count",
-            "all_match",
-        ],
-        values=[
-            TAXI_RAW_TEMP_DIR.as_posix(),
-            len(link_parquet_files),
-            reference_parquet_file,
-            len(column_names),
-            all_match,
-        ],
-    )
+    reset_csv_dir(output_dir)
     write_csv(
-        output_file / "files.csv",
+        output_dir,
+        ["metadata", "files", "schema", "mismatches"],
         [
-            {"index": extract_month(link_parquet_file), "file": link_parquet_file.name}
-            for link_parquet_file in link_parquet_files
+            (
+                ["key", "value"],
+                [
+                    ["files_directory", "file_count", "reference_file", "column_count", "all_match"],
+                    [
+                        TAXI_RAW_TEMP_DIR.as_posix(),
+                        len(link_parquet_files),
+                        reference_parquet_file,
+                        len(column_names),
+                        "yes" if all_match else "no",
+                    ],
+                ],
+            ),
+            (
+                ["index", "file"],
+                [
+                    [extract_month(link_parquet_file) for link_parquet_file in link_parquet_files],
+                    [link_parquet_file.name for link_parquet_file in link_parquet_files],
+                ],
+            ),
+            (
+                ["column_name", "parquet_type", "database_type", "match"],
+                [
+                    column_names,
+                    parquet_types,
+                    database_types,
+                    [
+                        "yes" if is_schema_type_match(parquet_type, database_type) else "no"
+                        for parquet_type, database_type in zip(parquet_types, database_types)
+                    ],
+                ],
+            ),
+            (
+                ["file", "mismatch", "column_name", "parquet_type"],
+                [
+                    mismatch_files,
+                    mismatches,
+                    mismatch_column_names,
+                    mismatch_parquet_types,
+                ],
+            ),
         ],
-        preserve_header_underscores=True,
     )
-    write_csv(
-        output_file / "schema.csv",
-        [
-            {
-                "column_name": column_name,
-                "parquet_type": parquet_type,
-                "database_type": database_type,
-                "match": "yes" if is_schema_type_match(parquet_type, database_type) else "no",
-            }
-            for column_name, parquet_type, database_type in zip(column_names, parquet_types, database_types)
-        ],
-    )
-    write_csv(
-        output_file / "mismatches.csv",
-        [
-            {
-                "file": file,
-                "mismatch": mismatch,
-                "column_name": column_name,
-                "parquet_type": parquet_type,
-            }
-            for file, mismatch, column_name, parquet_type in zip(
-                mismatch_files,
-                mismatches,
-                mismatch_column_names,
-                mismatch_parquet_types,
-            )
-        ],
-    )
-    print(f"EDA 01 saved: {output_file.name}")
+    print(f"EDA 01 saved: {output_dir.name}")
 
 
 if __name__ == "__main__":

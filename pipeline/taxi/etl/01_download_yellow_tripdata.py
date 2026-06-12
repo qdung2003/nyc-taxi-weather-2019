@@ -12,9 +12,8 @@ def get_expected_taxi_raw_filenames() -> list[str]:
     ]
 
 
-def download_file(filenames: list[str] | None = None) -> None:
+def download_file(filenames: list[str]) -> None:
     TAXI_RAW_TEMP_DIR.mkdir(parents=True, exist_ok=True)
-    filenames = filenames or get_expected_taxi_raw_filenames()
     overall_bar_setup = {
         "total": len(filenames),
         "desc": "Download files",
@@ -73,22 +72,12 @@ def ensure_taxi_raw_files() -> list:
         filename for filename in expected_filenames
         if filename not in existing_filenames
     ]
-    if missing_filenames:
+    if len(missing_filenames) > 0:
         print(
             f"INFO: Missing {len(missing_filenames)} of {len(expected_filenames)} taxi parquet files. "
             "Downloading missing files..."
         )
         download_file(missing_filenames)
-
-    still_missing_filenames = [
-        filename for filename in expected_filenames
-        if not (TAXI_RAW_TEMP_DIR / filename).exists()
-    ]
-    if still_missing_filenames:
-        raise SystemExit(
-            "Missing taxi parquet files after download attempt: "
-            + ", ".join(still_missing_filenames)
-        )
 
     return [TAXI_RAW_TEMP_DIR / filename for filename in expected_filenames]
 

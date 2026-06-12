@@ -2,7 +2,7 @@ from pipeline.constants.modules import ETL02_INGEST
 from pipeline.constants.paths import TAXI_EDA_RESULTS_DIR
 from pipeline.constants.tables import TABLE_TAXI_RAW
 from pipeline.constants.times import YEAR
-from pipeline.services.helpers import percentage, reset_csv_dir, write_csv, write_metadata_csv
+from pipeline.services.helpers import percentage, reset_csv_dir, write_csv
 from pipeline.services.queries import ensure_table_exists, quote_identifier, run_with_conn
 
 
@@ -102,24 +102,47 @@ def main(conn):
     rules.sort(key=lambda item: -item["exclusive_removed_count"])
 
     reset_csv_dir(output_file)
-    write_metadata_csv(
+    write_csv(
         output_file,
-        keys=[
-            "raw_count",
-            "clean_count",
-            "removed_count",
-            "removed_percentage",
-            "rule_count",
-        ],
-        values=[
-            raw_row_count,
-            clean_row_count,
-            removed_row_count,
-            percentage(removed_row_count, raw_row_count),
-            len(rules),
+        ["metadata", "rules"],
+        [
+            (
+                ["key", "value"],
+                [
+                    ["raw_count", "clean_count", "removed_count", "removed_percentage", "rule_count"],
+                    [
+                        raw_row_count,
+                        clean_row_count,
+                        removed_row_count,
+                        percentage(removed_row_count, raw_row_count),
+                        len(rules),
+                    ],
+                ],
+            ),
+            (
+                [
+                    "rule_name",
+                    "column_name",
+                    "invalid_count",
+                    "exclusive_removed_count",
+                    "shared_removed_count",
+                    "invalid_percentage",
+                    "exclusive_removed_percentage",
+                    "shared_removed_percentage",
+                ],
+                [
+                    [rule["rule_name"] for rule in rules],
+                    [rule["column_name"] for rule in rules],
+                    [rule["invalid_count"] for rule in rules],
+                    [rule["exclusive_removed_count"] for rule in rules],
+                    [rule["shared_removed_count"] for rule in rules],
+                    [rule["invalid_percentage"] for rule in rules],
+                    [rule["exclusive_removed_percentage"] for rule in rules],
+                    [rule["shared_removed_percentage"] for rule in rules],
+                ],
+            ),
         ],
     )
-    write_csv(output_file / "rules.csv", rules)
     print(f"EDA 06 saved: {output_file.name}")
 
 

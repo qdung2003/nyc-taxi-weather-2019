@@ -1,4 +1,4 @@
-import csv, shutil, json
+import csv, shutil, json, re
 from decimal import Decimal
 from pathlib import Path
 from typing import Any
@@ -11,6 +11,108 @@ def extract_month(path: Path) -> int:
     name = path.stem # e.g. yellow_tripdata_2019-01 from path/to/yellow_tripdata_2019-01.parquet
     month_str = name.split("-")[-1] # e.g. 01 from yellow_tripdata_2019-01
     return int(month_str) # e.g. 1 from 01
+
+
+def is_schema_type_match(parquet_type: str, database_type: str) -> bool:
+    parquet_type = str(parquet_type or "").strip().upper()
+    database_type = str(database_type or "").strip().upper()
+    if not parquet_type or not database_type:
+        return False
+
+    parquet_tokens = _schema_type_tokens(parquet_type)
+    database_tokens = _schema_type_tokens(database_type)
+    return bool(parquet_tokens & database_tokens)
+
+
+def _schema_type_tokens(type_name: str) -> set[str]:
+    normalized = str(type_name or "").strip().upper()
+    if not normalized:
+        return set()
+
+    base = normalized.split("(", 1)[0]
+    tokens = {normalized, base}
+
+    if "INT" in normalized and "UINT" not in normalized:
+        tokens.add("INTEGER")
+    if any(token in normalized for token in {"DOUBLE", "FLOAT", "REAL", "DECIMAL", "NUMERIC"}):
+        tokens.add("FLOAT")
+    if any(token in normalized for token in {"CHAR", "STRING", "TEXT", "VARCHAR"}):
+        tokens.add("STRING")
+    if "TIMESTAMP" in normalized or "DATETIME" in normalized:
+        tokens.add("TIMESTAMP")
+    elif "DATE" in normalized:
+        tokens.add("DATE")
+    if "BOOL" in normalized:
+        tokens.add("BOOLEAN")
+
+    if "BIGINT" in normalized:
+        tokens.add("INTEGER")
+
+    return tokens
+
+
+def reset_csv_dir(path: Path) -> None:
+    if path.exists():
+        shutil.rmtree(path)
+    path.mkdir(parents=True, exist_ok=True)
+
+
+def write_csv(
+    output_dir: Path,
+    file_name_array: list[str],
+    tuple_data_array: list[Any],
+) -> None:
+    if len(file_name_array) != len(tuple_data_array):
+        raise ValueError("csv_array and tuple_data_array must have the same length")
+
+    output_dir.mkdir(parents=True, exist_ok=True)
+    for file_name, tuple_data in zip(file_name_array, tuple_data_array):
+        normalized_file_name = file_name if file_name.endswith(".csv") else f"{file_name}.csv"
+        if len(tuple_data) != 2:
+            raise ValueError("each csv payload must contain columns and value arrays")
+        column_names, values_arrays = tuple_data
+        if len(column_names) != len(values_arrays):
+            raise ValueError("column_names and values must have the same length")
+
+        row_count = len(values_arrays[0]) if values_arrays else 0
+        if any(len(values_array) != row_count for values_array in values_arrays):
+            raise ValueError("all value arrays must have the same length")
+
+        with (output_dir / normalized_file_name).open("w", encoding="utf-8", newline="") as file:
+            writer = csv.writer(file)
+            writer.writerow(column_names)
+            for row_index in range(row_count):
+                writer.writerow(
+                    [
+                        "null" if values[row_index] is None else values[row_index]
+                        for values in values_arrays
+                    ]
+                )
+
+
+def write_csv_rows(
+    path: Path,
+    rows: list[dict[str, Any]],
+    *,
+    columns: list[str] | None = None,
+) -> None:
+    if not rows and not columns:
+        return
+
+    columns = columns or ordered_fieldnames(rows)
+    write_csv(
+        path.parent,
+        [path.stem],
+        [(
+            columns,
+            [[row.get(column) for row in rows] for column in columns],
+        )],
+    )
+
+
+
+
+
 
 
 def round_if_needed(value, digits: int = 2):
@@ -29,81 +131,13 @@ def percentage(part, total):
     return round_if_needed((part / total * 100) if total else 0.0)
 
 
-def is_schema_type_match(parquet_type: str | None, database_type: str | None) -> bool:
-    parquet_type = str(parquet_type or "").strip().upper()
-    database_type = str(database_type or "").strip().upper()
-    if not parquet_type or not database_type:
-        return False
-
-    parquet_to_database_candidates = {
-        "INT64": {"BIGINT", "INTEGER", "INT", "INT8"},
-        "DOUBLE": {"DOUBLE", "FLOAT", "REAL", "DECIMAL", "NUMERIC"},
-        "STRING": {"VARCHAR", "TEXT", "STRING"},
-        "DATE32[DAY]": {"DATE"},
-        "TIMESTAMP[US]": {"TIMESTAMP", "DATETIME"},
-        "BOOLEAN": {"BOOLEAN", "BOOL"},
-    }
-    candidates = parquet_to_database_candidates.get(parquet_type)
-    if candidates is None:
-        return parquet_type == database_type
-    return any(
-        database_type == candidate or database_type.startswith(f"{candidate}(")
-        for candidate in candidates
-    )
 
 
-def reset_csv_dir(path: Path) -> None:
-    if path.exists():
-        shutil.rmtree(path)
-    path.mkdir(parents=True, exist_ok=True)
 
 
-def write_metadata_csv(
-    output_dir: Path,
-    metadata: dict[str, Any] | None = None,
-    *,
-    keys: list[str] | None = None,
-    values: list[Any] | None = None,
-) -> None:
-    if metadata is not None:
-        keys = list(metadata.keys())
-        values = list(metadata.values())
-    if keys is None or values is None:
-        raise ValueError("write_metadata_csv requires either metadata or both keys and values")
-    if len(keys) != len(values):
-        raise ValueError("write_metadata_csv keys and values must have the same length")
-
-    rows = [
-        {
-            "key": key,
-            "value": ("yes" if value else "no") if isinstance(value, bool) else value,
-        }
-        for key, value in zip(keys, values)
-    ]
-    write_csv(output_dir / "metadata.csv", rows, preserve_header_underscores=True)
 
 
-def write_csv(path: Path, rows: list[dict[str, Any]], *, preserve_header_underscores: bool = True) -> None:
-    if not rows:
-        return
-    path.parent.mkdir(parents=True, exist_ok=True)
-    fieldnames = ordered_fieldnames(rows)
-    output_fieldnames = (
-        fieldnames
-        if preserve_header_underscores
-        else [fieldname.replace("_", " ") for fieldname in fieldnames]
-    )
-    output_rows = [
-        {
-            output_fieldname: "null" if fieldname in row and row[fieldname] is None else row.get(fieldname)
-            for fieldname, output_fieldname in zip(fieldnames, output_fieldnames)
-        }
-        for row in rows
-    ]
-    with path.open("w", encoding="utf-8", newline="") as file:
-        writer = csv.DictWriter(file, fieldnames=output_fieldnames, extrasaction="ignore")
-        writer.writeheader()
-        writer.writerows(output_rows)
+
 
 
 
@@ -139,114 +173,89 @@ def ordered_fieldnames(rows: list[dict[str, Any]]) -> list[str]:
 
 
 
-def write_low_unique_csvs(output_dir: Path, rows: list[dict[str, Any]]) -> None:
-    columns = []
-    value_rows = []
-    for row in rows:
-        column_name = row.get("column_name")
-        columns.append(
-            {
-                **{
-                    key: value
-                    for key, value in row.items()
-                    if key not in {"values", "counts", "percentages"}
-                },
-            }
-        )
+def column_profile_file_name(column_name: str, index: int) -> str:
+    slug = re.sub(r"[^0-9A-Z]+", "_", str(column_name or "").upper()).strip("_")
+    if not slug:
+        slug = "COLUMN"
+    return f"{index:02d}_{slug}.csv"
+
+
+def write_low_unique_column_csv(output_dir: Path, row: dict[str, Any], *, file_name: str) -> str:
+    profile_dir = output_dir / "low_unique_columns"
+    profile_dir.mkdir(parents=True, exist_ok=True)
+    profile_path = profile_dir / file_name
+    value_rows = [
+        {
+            "value": value,
+            "count": count,
+            "percentage": percentage_value,
+        }
         for value, count, percentage_value in zip(
             row.get("values", []),
             row.get("counts", []),
             row.get("percentages", []),
-        ):
-            value_rows.append(
-                {
-                    "column_name": column_name,
-                    "value": value,
-                    "count": count,
-                    "percentage": percentage_value,
-                }
-            )
-    write_csv(output_dir / "low_unique_columns.csv", columns)
-    write_csv(output_dir / "low_unique_columns_array.csv", value_rows)
+        )
+    ]
+    write_csv_rows(profile_path, value_rows, columns=["value", "count", "percentage"])
+    return profile_path.relative_to(output_dir).as_posix()
 
 
-def write_high_unique_csvs(
-    output_dir: Path,
-    rows: list[dict[str, Any]],
-    *,
-    base_name: str = "high_unique",
-) -> None:
-    simple_rows = []
-    datetime_rows = []
-    datetime_array_rows = []
-    numeric_rows = []
-    numeric_array_rows = []
-
-    for row in rows:
-        column_name = row.get("column_name")
-        common = {
-            **{
-                key: value
-                for key, value in row.items()
-                if key not in {
-                    "month_counts",
-                    "month_percentages",
-                    "bin_edges",
-                    "bin_counts",
-                    "bin_percentages",
-                    "filter",
-                }
-            },
-        }
-        filter_values = row.get("filter")
-        if isinstance(filter_values, dict):
-            for key, value in filter_values.items():
-                common[key] = value
-
-        if row.get("month_counts") or row.get("month_percentages"):
-            datetime_rows.append(common)
+def write_high_unique_column_csv(output_dir: Path, row: dict[str, Any], *, file_name: str) -> tuple[str, str]:
+    column_name = row.get("column_name")
+    if row.get("month_counts") or row.get("month_percentages"):
+        profile_kind = "datetime"
+        profile_dir = output_dir / "high_unique_columns_datetime"
+        profile_rows = [
+            {
+                "month": month,
+                "month_count": month_count,
+                "month_percentage": month_percentage,
+            }
             for month, (month_count, month_percentage) in enumerate(
                 zip(row.get("month_counts", []), row.get("month_percentages", [])),
                 start=1,
-            ):
-                datetime_array_rows.append(
-                    {
-                        "column_name": column_name,
-                        "month": month,
-                        "month_count": month_count,
-                        "month_percentage": month_percentage,
-                    }
-                )
-        elif row.get("bin_edges") or row.get("bin_counts") or row.get("bin_percentages"):
-            numeric_rows.append(common)
-            bin_edges = row.get("bin_edges", [])
-            bin_counts = row.get("bin_counts", [])
-            bin_percentages = row.get("bin_percentages", [])
-            use_full_bin_edges = (
-                column_name in AGGREGATE_COLUMNS
-                and len(bin_edges) == len(bin_counts) + 1
-                and len(bin_edges) == len(bin_percentages) + 1
             )
-            edge_values = bin_edges if use_full_bin_edges else bin_edges[:len(bin_counts)]
-            for index, bin_edge in enumerate(edge_values):
-                numeric_array_row = {
-                    "column_name": column_name,
-                    "bin_edge": bin_edge,
-                    "bin_count": bin_counts[index] if index < len(bin_counts) else None,
-                    "bin_percentage": bin_percentages[index] if index < len(bin_percentages) else None,
-                }
-                numeric_array_rows.append(numeric_array_row)
-        else:
-            simple_rows.append(common)
+        ]
+    elif row.get("bin_edges") or row.get("bin_counts") or row.get("bin_percentages"):
+        profile_kind = "numeric"
+        profile_dir = output_dir / "high_unique_columns_numeric"
+        bin_edges = row.get("bin_edges", [])
+        bin_counts = row.get("bin_counts", [])
+        bin_percentages = row.get("bin_percentages", [])
+        use_full_bin_edges = (
+            column_name in AGGREGATE_COLUMNS
+            and len(bin_edges) == len(bin_counts) + 1
+            and len(bin_edges) == len(bin_percentages) + 1
+        )
+        edge_values = bin_edges if use_full_bin_edges else bin_edges[:len(bin_counts)]
+        profile_rows = [
+            {
+                "bin_edge": bin_edge,
+                "bin_count": bin_counts[index] if index < len(bin_counts) else None,
+                "bin_percentage": bin_percentages[index] if index < len(bin_percentages) else None,
+            }
+            for index, bin_edge in enumerate(edge_values)
+        ]
+    else:
+        profile_kind = "simple"
+        profile_dir = output_dir / "high_unique_columns"
+        profile_rows = [
+            {
+                key: value
+                for key, value in row.items()
+                if key not in {"filter"}
+            }
+        ]
 
-    if simple_rows:
-        write_csv(output_dir / f"{base_name}_columns.csv", simple_rows)
-    if datetime_rows:
-        write_csv(output_dir / f"{base_name}_columns_datetime.csv", datetime_rows)
-        write_csv(output_dir / f"{base_name}_columns_datetime_array.csv", datetime_array_rows)
-    if numeric_rows:
-        write_csv(output_dir / f"{base_name}_columns_numeric.csv", numeric_rows)
-        write_csv(output_dir / f"{base_name}_columns_numeric_array.csv", numeric_array_rows)
+    profile_dir.mkdir(parents=True, exist_ok=True)
+    profile_path = profile_dir / file_name
+    columns = {
+        "datetime": ["month", "month_count", "month_percentage"],
+        "numeric": ["bin_edge", "bin_count", "bin_percentage"],
+        "simple": ordered_fieldnames(profile_rows),
+    }[profile_kind]
+    write_csv_rows(profile_path, profile_rows, columns=columns)
+    return profile_kind, profile_path.relative_to(output_dir).as_posix()
 
 
 def write_aggregate_columns_csvs(output_dir: Path, rows: list[dict[str, Any]]) -> None:
@@ -281,8 +290,8 @@ def write_aggregate_columns_csvs(output_dir: Path, rows: list[dict[str, Any]]) -
                     "bin_percentage": bin_percentage,
                 }
             )
-    write_csv(output_dir / "aggregate_columns.csv", column_rows)
-    write_csv(output_dir / "aggregate_columns_array.csv", array_rows)
+    write_csv_rows(output_dir / "aggregate_columns.csv", column_rows)
+    write_csv_rows(output_dir / "aggregate_columns_array.csv", array_rows)
 
 
 def dumps_json_compact(

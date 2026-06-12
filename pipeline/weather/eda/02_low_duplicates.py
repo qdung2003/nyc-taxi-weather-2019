@@ -4,12 +4,18 @@ from pipeline.constants.modules import WEATHER02_INGEST
 from pipeline.constants.paths import WAREHOUSE_DB_FILE, WEATHER_EDA_RESULTS_DIR
 from pipeline.constants.tables import TABLE_WEATHER_RAW
 from pipeline.constants.unique_settings import MAX_UNIQUE_VALUES
-from pipeline.services.helpers import reset_csv_dir, write_high_unique_csvs, write_low_unique_csvs, write_metadata_csv
+from pipeline.services.helpers import (
+    column_profile_file_name,
+    reset_csv_dir,
+    write_csv,
+    write_csv_rows,
+    write_low_unique_column_csv,
+)
 from pipeline.services.queries import (
-    build_low_unique_columns,
     calculate_valid_type_percentages,
     count_limited_unique_values,
     ensure_table_exists,
+    profile_low_unique_column,
     quote_identifier,
     run_with_conn,
 )
@@ -72,14 +78,43 @@ def main(conn):
         low_cardinality_data_types,
         row_count,
     )
-    low_unique_columns = build_low_unique_columns(
-        conn,
-        weather_raw_quoted,
-        low_cardinality_column_names,
-        low_cardinality_data_types,
-        low_valid_type_percentages,
-        row_count,
-    )
+    reset_csv_dir(output_file)
+    low_unique_columns = []
+    for index, (column_name, data_type, valid_type_percent) in enumerate(
+        tqdm(
+            zip(
+                low_cardinality_column_names,
+                low_cardinality_data_types,
+                low_valid_type_percentages,
+            ),
+            desc="Phase 2 value_counts",
+            unit="col",
+            total=len(low_cardinality_column_names),
+            leave=True,
+        ),
+        start=1,
+    ):
+        unique_count = count_limited_unique_values(
+            conn,
+            weather_raw_quoted,
+            quote_identifier(column_name),
+            MAX_UNIQUE_VALUES,
+        )
+        low_unique_column = profile_low_unique_column(
+            conn,
+            weather_raw_quoted,
+            column_name,
+            data_type,
+            unique_count,
+            valid_type_percent,
+            row_count,
+        )
+        low_unique_column["profile_csv"] = write_low_unique_column_csv(
+            output_file,
+            low_unique_column,
+            file_name=column_profile_file_name(column_name, index),
+        )
+        low_unique_columns.append(low_unique_column)
 
     high_unique_columns = []
     if high_cardinality_column_names:
@@ -104,28 +139,48 @@ def main(conn):
             )
 
     print("Phase 3/3: Writing CSV tables...")
-    reset_csv_dir(output_file)
-    write_metadata_csv(
+    write_csv(
         output_file,
-        keys=[
-            "warehouse_db_path",
-            "table",
-            "row_count",
-            "max_unique_values",
-            "low_unique_column_count",
-            "high_unique_column_count",
-        ],
-        values=[
-            WAREHOUSE_DB_FILE.as_posix(),
-            TABLE_WEATHER_RAW,
-            row_count,
-            MAX_UNIQUE_VALUES,
-            len(low_unique_columns),
-            len(high_unique_columns),
-        ],
+        ["metadata"],
+        [(
+            ["key", "value"],
+            [
+                [
+                    "warehouse_db_path",
+                    "table",
+                    "row_count",
+                    "max_unique_values",
+                    "low_unique_column_count",
+                    "high_unique_column_count",
+                ],
+                [
+                    WAREHOUSE_DB_FILE.as_posix(),
+                    TABLE_WEATHER_RAW,
+                    row_count,
+                    MAX_UNIQUE_VALUES,
+                    len(low_unique_columns),
+                    len(high_unique_columns),
+                ],
+            ],
+        )],
     )
-    write_low_unique_csvs(output_file, low_unique_columns)
-    write_high_unique_csvs(output_file, high_unique_columns)
+    write_csv_rows(
+        output_file / "low_unique_columns.csv",
+        [
+            {
+                key: value
+                for key, value in row.items()
+                if key not in {"values", "counts", "percentages"}
+            }
+            for row in low_unique_columns
+        ],
+        columns=["column_name", "data_type", "unique_count", "valid_type_percent", "profile_csv"],
+    )
+    write_csv_rows(
+        output_file / "high_unique_columns.csv",
+        high_unique_columns,
+        columns=["column_name", "data_type", "valid_type_percent"],
+    )
     print(f"EDA 02 saved: {output_file.name}")
 
 

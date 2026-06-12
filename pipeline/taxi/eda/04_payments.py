@@ -118,10 +118,54 @@ def main(conn):
     ]
 
     reset_csv_dir(output_file)
-    write_csv(output_file / "check_1.csv", check_1_rows)
-    write_csv(output_file / "check_1_array.csv", check_1_array_rows)
-    write_csv(output_file / "check_2_3.csv", check_2_3_rows)
-    write_csv(output_file / "check_2_3_array.csv", check_2_3_array_rows)
+    write_csv(
+        output_file,
+        [
+            "check_1",
+            "check_1_array",
+            "check_2_3",
+            "check_2_3_array",
+        ],
+        [
+            (
+                ["check", "description", "column_count"],
+                [
+                    [row["check"] for row in check_1_rows],
+                    [row["description"] for row in check_1_rows],
+                    [row["column_count"] for row in check_1_rows],
+                ],
+            ),
+            (
+                ["check", "payment_type", "tip_0_count", "total_count", "percent"],
+                [
+                    [row["check"] for row in check_1_array_rows],
+                    [row["payment_type"] for row in check_1_array_rows],
+                    [row["tip_0_count"] for row in check_1_array_rows],
+                    [row["total_count"] for row in check_1_array_rows],
+                    [row["percent"] for row in check_1_array_rows],
+                ],
+            ),
+            (
+                ["check", "description", "payment_type", "row_count", "column_count"],
+                [
+                    [row["check"] for row in check_2_3_rows],
+                    [row["description"] for row in check_2_3_rows],
+                    [row["payment_type"] for row in check_2_3_rows],
+                    [row["row_count"] for row in check_2_3_rows],
+                    [row["column_count"] for row in check_2_3_rows],
+                ],
+            ),
+            (
+                ["check", "column_name", "count", "percent"],
+                [
+                    [row["check"] for row in check_2_3_array_rows],
+                    [row["column_name"] for row in check_2_3_array_rows],
+                    [row["count"] for row in check_2_3_array_rows],
+                    [row["percent"] for row in check_2_3_array_rows],
+                ],
+            ),
+        ],
+    )
     print(f"EDA 04 saved: {output_file.name}")
 
 

@@ -1,7 +1,10 @@
 from tqdm import tqdm
-from pipeline.services.helpers import reset_csv_dir, write_high_unique_csvs, write_low_unique_csvs, write_metadata_csv
+from pipeline.services.helpers import (
+    reset_csv_dir,
+    write_csv,
+)
 from pipeline.services.queries import (
-    build_low_unique_columns,
+    build_low_unique_column_arrays,
     calculate_valid_type_percentages,
     count_limited_unique_values,
     ensure_table_exists,
@@ -21,7 +24,6 @@ TAXI_EDA_RESULTS_DIR.mkdir(parents=True, exist_ok=True)
 def main(conn):
     ensure_table_exists(conn, TABLE_TAXI_RAW, ETL02_INGEST.create_taxi_raw_table)
     taxi_raw_quoted = quote_identifier(TABLE_TAXI_RAW)
-
     row_count = conn.execute(
         f"SELECT count(*) FROM {taxi_raw_quoted}"
     ).fetchone()[0]
@@ -85,58 +87,73 @@ def main(conn):
         "Phase 2/3: Counting values for low-cardinality columns "
         f"({len(low_unique_column_names)}/{len(column_names)})..."
     )
-    
-    low_unique_columns = build_low_unique_columns(
+
+    reset_csv_dir(output_file)
+    (
+        low_unique_array_column_names,
+        low_unique_array_values,
+        low_unique_array_counts,
+        low_unique_array_percentages,
+    ) = build_low_unique_column_arrays(
         conn,
         taxi_raw_quoted,
         low_unique_column_names,
-        low_unique_data_types,
-        low_unique_unique_counts,
-        low_unique_valid_type_percents,
         row_count,
     )
 
-
-    high_unique_columns = []
-    
-    if high_unique_column_names:
-        for column_name, data_type, valid_type_percent in zip(
-            high_unique_column_names,
-            high_unique_data_types,
-            high_unique_valid_type_percents,
-        ):
-            high_unique_columns.append(
-                {
-                    "column_name": column_name,
-                    "data_type": data_type,
-                    "valid_type_percent": valid_type_percent,
-                }
-            )
-
-
     print("Phase 3/3: Writing CSV tables...")
-    reset_csv_dir(output_file)
-    write_metadata_csv(
+    write_csv(
         output_file,
-        keys=[
-            "warehouse_database_path",
-            "table",
-            "row_count",
-            "max_unique_values",
-            "low_unique_column_count",
-            "high_unique_column_count",
-        ],
-        values=[
-            WAREHOUSE_DB_FILE.as_posix(),
-            TABLE_TAXI_RAW,
-            row_count,
-            MAX_UNIQUE_VALUES,
-            len(low_unique_columns),
-            len(high_unique_columns),
+        ["metadata", "low_unique_columns", "low_unique_column_arrays", "high_unique_columns"],
+        [(
+            ["key", "value"],
+            [
+                [
+                    "warehouse_database_path",
+                    "table",
+                    "row_count",
+                    "max_unique_values",
+                    "low_unique_column_count",
+                    "high_unique_column_count",
+                ],
+                [
+                    WAREHOUSE_DB_FILE.as_posix(),
+                    TABLE_TAXI_RAW,
+                    row_count,
+                    MAX_UNIQUE_VALUES,
+                    len(low_unique_column_names),
+                    len(high_unique_column_names),
+                ],
+            ],
+        ),
+        (
+            ["column_name", "data_type", "unique_count", "valid_type_percent"],
+            [
+                low_unique_column_names,
+                low_unique_data_types,
+                low_unique_unique_counts,
+                low_unique_valid_type_percents,
+            ],
+        ),
+        (
+            ["column_name", "value", "count", "percentage"],
+            [
+                low_unique_array_column_names,
+                low_unique_array_values,
+                low_unique_array_counts,
+                low_unique_array_percentages,
+            ],
+        ),
+        (
+            ["column_name", "data_type", "valid_type_percent"],
+            [
+                high_unique_column_names,
+                high_unique_data_types,
+                high_unique_valid_type_percents,
+            ],
+        ),
         ],
     )
-    write_low_unique_csvs(output_file, low_unique_columns)
-    write_high_unique_csvs(output_file, high_unique_columns)
     print(f"EDA 02 saved: {output_file.name}")
 
 

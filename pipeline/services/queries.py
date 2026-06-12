@@ -2,7 +2,6 @@
 from datetime import datetime
 from pathlib import Path
 import csv
-import json
 from tqdm import tqdm
 from pipeline.services.connect import connect_warehouse
 from pipeline.services.helpers import percentage, round_if_needed
@@ -22,20 +21,6 @@ from pipeline.constants.upper_bounds_settings import (
 )
 
 
-# support
-def quote_identifier(name: str) -> str:
-    return f'"{name.replace(chr(34), chr(34) * 2)}"'
-
-
-def sql_table_ref(name: str) -> str:
-    stripped = name.strip()
-    if not stripped:
-        return stripped
-    if stripped.startswith("(") or (stripped.startswith('"') and stripped.endswith('"')):
-        return stripped
-    return quote_identifier(stripped)
-
-
 def run_with_conn(func) -> None:
     conn = connect_warehouse()
     try:
@@ -44,25 +29,8 @@ def run_with_conn(func) -> None:
         conn.close()
 
 
-
-def _is_valid_column_split(
-    column_names: list[str],
-    low_unique_columns: list[str],
-    high_unique_columns: list[str],
-) -> bool:
-    profile_column_names = low_unique_columns + high_unique_columns
-    return len(profile_column_names) == len(column_names) and set(profile_column_names) == set(column_names)
-
-
-def _column_split(column_names: list[str], low_unique_columns: list[str], high_unique_columns: list[str]):
-    low_unique_included = set(low_unique_columns)
-    high_unique_included = set(high_unique_columns)
-    return (
-        [column_name for column_name in column_names if column_name in low_unique_included],
-        [column_name for column_name in column_names if column_name in high_unique_included],
-    )
-
-
+def quote_identifier(name: str) -> str:
+    return f'"{name.replace(chr(34), chr(34) * 2)}"'
 
 
 def ensure_table_exists(conn, table_name: str, create_func) -> None:
@@ -77,6 +45,25 @@ def ensure_table_exists(conn, table_name: str, create_func) -> None:
     ).fetchone() is None:
         print(f"Missing table '{table_name}', creating...")
         create_func(conn)
+
+
+def count_limited_unique_values(
+    conn,
+    source_table_quoted: str,
+    column_quoted: str,
+    max_unique_values: int = MAX_UNIQUE_VALUES,
+) -> int:
+    unique_count = conn.execute(
+        f"""
+        SELECT COUNT(*)
+        FROM (
+            SELECT DISTINCT {column_quoted}
+            FROM {source_table_quoted}
+            LIMIT {max_unique_values + 1}
+        )
+        """
+    ).fetchone()[0]
+    return int(unique_count or 0)
 
 
 def calculate_valid_type_percentages(
@@ -119,46 +106,65 @@ def calculate_valid_type_percentages(
     return [valid_type_percent_by_column.get(column_name, 0.0) for column_name in column_names]
 
 
-# low_unique_column
-def count_limited_unique_values(
-    conn,
-    source_table_quoted: str,
-    column_quoted: str,
-    max_unique_values: int = MAX_UNIQUE_VALUES,
-) -> int:
-    unique_count = conn.execute(
-        f"""
-        SELECT COUNT(*)
-        FROM (
-            SELECT DISTINCT {column_quoted}
-            FROM {source_table_quoted}
-            LIMIT {max_unique_values + 1}
-        )
-        """
-    ).fetchone()[0]
-    return int(unique_count or 0)
+def low_unique_sort_key(item):
+    value = round_if_needed(item[0])
+    if value is None:
+        return (2, 0.0, "")
+    if isinstance(value, (int, float)):
+        return (0, float(value), "")
+    return (1, 0.0, str(value))
 
 
-def build_low_unique_columns(
+def profile_low_unique_column(
     conn,
     source_table_quoted: str,
-    column_names: list[str],
-    data_types: list[str],
-    unique_counts: list[int],
-    valid_type_percentages: list[float],
+    column_name: str,
+    data_type: str,
+    unique_count: int,
+    valid_type_percent: float,
     row_count: int,
-    *,
-    desc: str = "Phase 2 value_counts",
-    leave: bool = True,
-) -> list[dict]:
-    low_unique_columns = []
-    for column_name, data_type, unique_count, valid_type_percent in tqdm(
-        zip(column_names, data_types, unique_counts, valid_type_percentages),
-        desc=desc,
-        unit="col",
-        total=len(column_names),
-        leave=leave,
-    ):
+) -> dict:
+    column_name_quoted = quote_identifier(column_name)
+    rows = conn.execute(
+        f"""
+        SELECT {column_name_quoted}, COUNT(*)
+        FROM {source_table_quoted}
+        GROUP BY {column_name_quoted}
+        """
+    ).fetchall()
+    sorted_rows = sorted(rows, key=low_unique_sort_key)
+
+    values = []
+    counts = []
+    percentages = []
+    for value, count in sorted_rows:
+        values.append(round_if_needed(value))
+        counts.append(int(count))
+        percentages.append(percentage(count, row_count))
+
+    return {
+        "column_name": column_name,
+        "data_type": data_type,
+        "unique_count": unique_count,
+        "valid_type_percent": valid_type_percent,
+        "values": values,
+        "counts": counts,
+        "percentages": percentages,
+    }
+
+
+def build_low_unique_column_arrays(
+    conn,
+    source_table_quoted: str,
+    low_unique_column_names: list[str],
+    row_count: int,
+) -> tuple[list[str], list, list[int], list[float]]:
+    column_names = []
+    values = []
+    counts = []
+    percentages = []
+
+    for column_name in low_unique_column_names:
         column_name_quoted = quote_identifier(column_name)
         rows = conn.execute(
             f"""
@@ -167,64 +173,89 @@ def build_low_unique_columns(
             GROUP BY {column_name_quoted}
             """
         ).fetchall()
+        sorted_rows = sorted(rows, key=low_unique_sort_key)
 
-        def sort_key(item):
-            value = round_if_needed(item[0])
-            if value is None:
-                return (2, 0.0, "")
-            if isinstance(value, (int, float)):
-                return (0, float(value), "")
-            return (1, 0.0, str(value))
-
-        sorted_rows = sorted(rows, key=sort_key)
-
-        values = []
-        counts = []
-        percentages = []
         for value, count in sorted_rows:
+            column_names.append(column_name)
             values.append(round_if_needed(value))
-            counts.append(int(count))
+            counts.append(count)
             percentages.append(percentage(count, row_count))
 
-        low_unique_columns.append(
-            {
-                "column_name": column_name,
-                "data_type": data_type,
-                "unique_count": unique_count,
-                "valid_type_percent": valid_type_percent,
-                "values": values,
-                "counts": counts,
-                "percentages": percentages,
-            }
-        )
+    return column_names, values, counts, percentages
 
-    return low_unique_columns
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+def sql_table_ref(name: str) -> str:
+    stripped = name.strip()
+    if not stripped:
+        return stripped
+    if stripped.startswith("(") or (stripped.startswith('"') and stripped.endswith('"')):
+        return stripped
+    return quote_identifier(stripped)
+
+
+
+
+
+
+def _is_valid_column_split(
+    column_names: list[str],
+    low_unique_columns: list[str],
+    high_unique_columns: list[str],
+) -> bool:
+    profile_column_names = low_unique_columns + high_unique_columns
+    return len(profile_column_names) == len(column_names) and set(profile_column_names) == set(column_names)
+
+
+def _column_split(column_names: list[str], low_unique_columns: list[str], high_unique_columns: list[str]):
+    low_unique_included = set(low_unique_columns)
+    high_unique_included = set(high_unique_columns)
+    return (
+        [column_name for column_name in column_names if column_name in low_unique_included],
+        [column_name for column_name in column_names if column_name in high_unique_included],
+    )
+
+
+
+
+
+
+
+
+
+
+# low_unique_column
+
+
+
 
 
 def get_column_groups(
     conn,
     source_table_quoted: str,
     column_names: list[str],
-    *,
     profile_file: Path | None = None,
-    desc: str = "EDA 03 - detecting column groups",
 ) -> tuple[list[str], list[str]]:
-    if profile_file and profile_file.is_file():
-        profile_report = json.loads(profile_file.read_text(encoding="utf-8"))
-        low_unique_columns = [
-            str(column_meta.get("column_name"))
-            for column_meta in profile_report.get("low_unique_columns", [])
-            if column_meta.get("column_name") is not None
-        ]
-        high_unique_column_meta = profile_report.get("high_unique_columns")
-        if high_unique_column_meta is not None:
-            high_unique_columns = [
-                str(column_meta.get("column_name"))
-                for column_meta in high_unique_column_meta
-                if column_meta.get("column_name") is not None
-            ]
-            if _is_valid_column_split(column_names, low_unique_columns, high_unique_columns):
-                return _column_split(column_names, low_unique_columns, high_unique_columns)
     if profile_file:
         profile_dir = profile_file.with_suffix("") if profile_file.suffix else profile_file
         low_unique_csv = profile_dir / "low_unique_columns.csv"
@@ -237,26 +268,14 @@ def get_column_groups(
 
     low_unique_columns = []
     high_unique_columns = []
-    for column_name in tqdm(
-        column_names,
-        desc=desc,
-        unit="col",
-        total=len(column_names),
-        leave=False,
-        disable=TQDM_DISABLE,
-        dynamic_ncols=True,
-        mininterval=TQDM_MIN_INTERVAL,
-    ):
-        unique_count = count_limited_unique_values(
+    for column_name in column_names:
+        target = low_unique_columns if count_limited_unique_values(
             conn,
             source_table_quoted,
             quote_identifier(column_name),
             MAX_UNIQUE_VALUES,
-        )
-        if unique_count <= MAX_UNIQUE_VALUES:
-            low_unique_columns.append(column_name)
-        else:
-            high_unique_columns.append(column_name)
+        ) <= MAX_UNIQUE_VALUES else high_unique_columns
+        target.append(column_name)
     return low_unique_columns, high_unique_columns
 
 
@@ -280,53 +299,40 @@ def get_column_data_types(column_type_rows, column_names: list[str]) -> list[str
     ]
 
 # high_unique_column
-def build_high_unique_columns(
+def profile_high_unique_column(
     conn,
     source_table: str,
-    column_names: list[str],
-    data_types: list[str],
-    valid_type_percentages: list[float],
+    column_name: str,
+    data_type: str,
+    valid_type_percent: float,
     row_count: int,
     *,
-    desc: str = "EDA 03 - profiling high-duplicate columns",
     temp_prefix: str = "tmp_eda03",
-) -> list[dict]:
-    high_unique_columns = []
-    for column_name, data_type, valid_type_percent in tqdm(
-        zip(column_names, data_types, valid_type_percentages),
-        desc=desc,
-        unit="col",
-        total=len(column_names),
-        leave=False,
-        disable=TQDM_DISABLE,
-        dynamic_ncols=True,
-        mininterval=TQDM_MIN_INTERVAL,
+) -> dict:
+    high_unique_column = {
+        "column_name": column_name,
+        "data_type": data_type,
+        "valid_type_percent": valid_type_percent,
+    }
+    type_str = str(data_type).lower()
+    if "timestamp" in type_str or type_str == "date":
+        high_unique_column.update(profile_datetime_column(conn, source_table, column_name, row_count))
+    elif any(
+        numeric_type in type_str
+        for numeric_type in ["integer", "float", "double", "decimal", "numeric", "real"]
     ):
-        high_unique_column = {
-            "column_name": column_name,
-            "data_type": data_type,
-            "valid_type_percent": valid_type_percent,
-        }
-        type_str = str(data_type).lower()
-        if "timestamp" in type_str or type_str == "date":
-            high_unique_column.update(profile_datetime_column(conn, source_table, column_name, row_count))
-        elif any(
-            numeric_type in type_str
-            for numeric_type in ["integer", "float", "double", "decimal", "numeric", "real"]
-        ):
-            high_unique_column.update(
-                profile_numeric_column(
-                    conn,
-                    source_table,
-                    column_name,
-                    row_count,
-                    tail_ratio=TAIL_RATIO,
-                    positive_bin_count=POSITIVE_BIN_COUNT,
-                    temp_prefix=temp_prefix,
-                )
+        high_unique_column.update(
+            profile_numeric_column(
+                conn,
+                source_table,
+                column_name,
+                row_count,
+                tail_ratio=TAIL_RATIO,
+                positive_bin_count=POSITIVE_BIN_COUNT,
+                temp_prefix=temp_prefix,
             )
-        high_unique_columns.append(high_unique_column)
-    return high_unique_columns
+        )
+    return high_unique_column
 
 
 # numeric_datetime_column

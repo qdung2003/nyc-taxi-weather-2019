@@ -2,7 +2,7 @@ import importlib
 
 from pipeline.constants.paths import FEATURE_EDA_RESULTS_DIR
 from pipeline.constants.tables import TABLE_TAXI_WEATHER_FEATURES
-from pipeline.services.helpers import reset_csv_dir, round_if_needed, write_csv, write_metadata_csv
+from pipeline.services.helpers import reset_csv_dir, round_if_needed, write_csv
 from pipeline.services.queries import ensure_table_exists, quote_identifier, run_with_conn
 
 
@@ -340,17 +340,88 @@ def main(conn):
     impact_rain_summary = build_summary(rain_status, rain_weekend, rain_level)
 
     reset_csv_dir(output_file)
-    write_metadata_csv(
+    write_csv(
         output_file,
-        keys=["weather_column_count", "metric_count"],
-        values=[len(WEATHER_COLUMNS), len(METRICS)],
+        [
+            "metadata",
+            "rain_status",
+            "rain_weekend",
+            "rain_level",
+            "avg_temp_level",
+            "temp_range_level",
+            "impact_rain_summary",
+        ],
+        [
+            (
+                ["key", "value"],
+                [["weather_column_count", "metric_count"], [len(WEATHER_COLUMNS), len(METRICS)]],
+            ),
+            (
+                ["rain_status", "day_count", *METRICS],
+                [
+                    [row["rain_status"] for row in rain_status],
+                    [row["day_count"] for row in rain_status],
+                    *[[row[metric] for row in rain_status] for metric in METRICS],
+                ],
+            ),
+            (
+                ["day_type", "rain_status", "day_count", *METRICS],
+                [
+                    [row["day_type"] for row in rain_weekend],
+                    [row["rain_status"] for row in rain_weekend],
+                    [row["day_count"] for row in rain_weekend],
+                    *[[row[metric] for row in rain_weekend] for metric in METRICS],
+                ],
+            ),
+            (
+                ["rain_level", "value_range", "day_count", *METRICS],
+                [
+                    [row["rain_level"] for row in rain_level],
+                    [row["value_range"] for row in rain_level],
+                    [row["day_count"] for row in rain_level],
+                    *[[row[metric] for row in rain_level] for metric in METRICS],
+                ],
+            ),
+            (
+                ["avg_temp_level", "value_range", "day_count", *METRICS],
+                [
+                    [row["avg_temp_level"] for row in avg_temp_level],
+                    [row["value_range"] for row in avg_temp_level],
+                    [row["day_count"] for row in avg_temp_level],
+                    *[[row[metric] for row in avg_temp_level] for metric in METRICS],
+                ],
+            ),
+            (
+                ["temp_range_level", "value_range", "day_count", *METRICS],
+                [
+                    [row["temp_range_level"] for row in temp_range_level],
+                    [row["value_range"] for row in temp_range_level],
+                    [row["day_count"] for row in temp_range_level],
+                    *[[row[metric] for row in temp_range_level] for metric in METRICS],
+                ],
+            ),
+            (
+                [
+                    "metric",
+                    "rain_pct",
+                    "weekday_rain_pct",
+                    "weekend_rain_pct",
+                    "light_rain_pct",
+                    "medium_rain_pct",
+                    "heavy_rain_pct",
+                ],
+                [
+                    [row["metric"] for row in impact_rain_summary],
+                    [row["rain_pct"] for row in impact_rain_summary],
+                    [row["weekday_rain_pct"] for row in impact_rain_summary],
+                    [row["weekend_rain_pct"] for row in impact_rain_summary],
+                    [row["light_rain_pct"] for row in impact_rain_summary],
+                    [row["medium_rain_pct"] for row in impact_rain_summary],
+                    [row["heavy_rain_pct"] for row in impact_rain_summary],
+                ],
+            ),
+        ],
     )
-    write_csv(output_file / "rain_status.csv", rain_status)
-    write_csv(output_file / "rain_weekend.csv", rain_weekend)
-    write_csv(output_file / "rain_level.csv", rain_level)
-    write_csv(output_file / "avg_temp_level.csv", avg_temp_level)
-    write_csv(output_file / "temp_range_level.csv", temp_range_level)
-    write_csv(output_file / "impact_rain_summary.csv", impact_rain_summary)
     print(f"Feature EDA 03 saved: {output_file.name}")
 
 

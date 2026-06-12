@@ -1,16 +1,23 @@
 import csv
+from tqdm import tqdm
 
 from pipeline.constants.modules import WEATHER02_INGEST
 from pipeline.constants.paths import WEATHER_EDA_RESULTS_DIR
 from pipeline.constants.tables import TABLE_WEATHER_RAW
 from pipeline.constants.times import YEAR
 from pipeline.constants.unique_settings import POSITIVE_BIN_COUNT
-from pipeline.services.helpers import reset_csv_dir, write_high_unique_csvs, write_metadata_csv
+from pipeline.services.helpers import (
+    column_profile_file_name,
+    reset_csv_dir,
+    write_csv,
+    write_csv_rows,
+    write_high_unique_column_csv,
+)
 from pipeline.services.queries import (
-    build_high_unique_columns,
     calculate_valid_type_percentages,
     ensure_table_exists,
     get_column_data_types,
+    profile_high_unique_column,
     quote_identifier,
     run_with_conn,
 )
@@ -85,36 +92,77 @@ def main(conn):
         high_unique_data_types,
         row_count,
     )
-    high_unique_columns = build_high_unique_columns(
-        conn,
-        TABLE_WEATHER_RAW,
-        high_unique_column_names,
-        high_unique_data_types,
-        high_unique_valid_type_percentages,
-        row_count,
-        desc="Weather EDA 03 - profiling high-duplicate columns",
-        temp_prefix="tmp_weather_eda03",
-    )
+    reset_csv_dir(output_file)
+    high_unique_columns = []
+    for index, (column_name, data_type, valid_type_percent) in enumerate(
+        tqdm(
+            zip(
+                high_unique_column_names,
+                high_unique_data_types,
+                high_unique_valid_type_percentages,
+            ),
+            desc="Weather EDA 03 - profiling high-duplicate columns",
+            unit="col",
+            total=len(high_unique_column_names),
+            leave=False,
+        ),
+        start=1,
+    ):
+        high_unique_column = profile_high_unique_column(
+            conn,
+            TABLE_WEATHER_RAW,
+            column_name,
+            data_type,
+            valid_type_percent,
+            row_count,
+            temp_prefix="tmp_weather_eda03",
+        )
+        profile_kind, profile_csv = write_high_unique_column_csv(
+            output_file,
+            high_unique_column,
+            file_name=column_profile_file_name(column_name, index),
+        )
+        high_unique_column["profile_kind"] = profile_kind
+        high_unique_column["profile_csv"] = profile_csv
+        high_unique_columns.append(high_unique_column)
+
     for high_unique_column in high_unique_columns:
         if high_unique_column.get("column_name") == "DATE":
             high_unique_column["filter"] = build_filter(conn, weather_raw_quoted)
             break
 
-    reset_csv_dir(output_file)
-    write_metadata_csv(
+    write_csv(
         output_file,
-        keys=[
-            "tail_ratio",
-            "positive_bin_count",
-            "high_unique_column_count",
-        ],
-        values=[
-            "1/101",
-            POSITIVE_BIN_COUNT,
-            len(high_unique_columns),
+        ["metadata"],
+        [(
+            ["key", "value"],
+            [
+                ["tail_ratio", "positive_bin_count", "high_unique_column_count"],
+                ["1/101", POSITIVE_BIN_COUNT, len(high_unique_columns)],
+            ],
+        )],
+    )
+    write_csv_rows(
+        output_file / "high_unique_columns.csv",
+        [
+            {
+                **{
+                    key: value
+                    for key, value in row.items()
+                    if key not in {
+                        "month_counts",
+                        "month_percentages",
+                        "bin_edges",
+                        "bin_counts",
+                        "bin_percentages",
+                        "filter",
+                    }
+                },
+                **(row.get("filter") if isinstance(row.get("filter"), dict) else {}),
+            }
+            for row in high_unique_columns
         ],
     )
-    write_high_unique_csvs(output_file, high_unique_columns)
     print(f"EDA 03 saved: {output_file.name}")
 
 

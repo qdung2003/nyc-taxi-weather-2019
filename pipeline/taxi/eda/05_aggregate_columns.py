@@ -1,3 +1,4 @@
+from tqdm import tqdm
 from pipeline.constants.modules import ETL03_AGGREGATE
 from pipeline.constants.columns import AGGREGATE_COLUMNS
 from pipeline.constants.paths import TAXI_EDA_RESULTS_DIR
@@ -5,13 +6,13 @@ from pipeline.constants.tmp_tables import TMP_TAXI03
 from pipeline.services.helpers import (
     reset_csv_dir,
     write_aggregate_columns_csvs,
-    write_metadata_csv,
+    write_csv,
 )
 from pipeline.services.queries import (
-    build_high_unique_columns,
     calculate_valid_type_percentages,
     ensure_table_exists,
     get_column_data_types,
+    profile_high_unique_column,
     quote_identifier,
     run_with_conn,
 )
@@ -43,23 +44,27 @@ def main(conn):
         data_types,
         row_count,
     )
-    aggregate_columns = build_high_unique_columns(
-        conn,
-        TMP_TAXI03,
-        column_names,
-        data_types,
-        valid_type_percentages,
-        row_count,
-        desc="EDA 05 - profiling aggregate columns",
-        temp_prefix="tmp_eda05",
-    )
+    aggregate_columns = [
+        profile_high_unique_column(
+            conn,
+            TMP_TAXI03,
+            column_name,
+            data_type,
+            valid_type_percent,
+            row_count,
+            temp_prefix="tmp_eda05",
+        )
+        for column_name, data_type, valid_type_percent in tqdm(
+            zip(column_names, data_types, valid_type_percentages),
+            desc="EDA 05 - profiling aggregate columns",
+            unit="col",
+            total=len(column_names),
+            leave=False,
+        )
+    ]
 
     reset_csv_dir(output_file)
-    write_metadata_csv(
-        output_file,
-        keys=["aggregate_column_count"],
-        values=[len(aggregate_columns)],
-    )
+    write_csv(output_file, ["metadata"], [(["key", "value"], [["aggregate_column_count"], [len(aggregate_columns)]])])
     write_aggregate_columns_csvs(output_file, aggregate_columns)
     print(f"EDA 05 saved: {output_file.name}")
 

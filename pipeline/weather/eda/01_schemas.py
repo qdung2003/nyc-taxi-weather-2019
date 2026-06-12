@@ -3,7 +3,7 @@ import pyarrow.csv as pv
 from pipeline.constants.modules import WEATHER01_DOWNLOAD, WEATHER02_INGEST
 from pipeline.constants.paths import WEATHER_EDA_RESULTS_DIR
 from pipeline.constants.tables import TABLE_WEATHER_RAW
-from pipeline.services.helpers import is_schema_type_match, reset_csv_dir, write_csv, write_metadata_csv
+from pipeline.services.helpers import is_schema_type_match, reset_csv_dir, write_csv
 from pipeline.services.queries import ensure_table_exists, run_with_conn
 
 
@@ -36,35 +36,36 @@ def main(conn):
     )
 
     reset_csv_dir(output_file)
-    write_metadata_csv(
-        output_file,
-        keys=[
-            "file_directory",
-            "file_name",
-            "column_count",
-            "all_match",
-        ],
-        values=[
-            weather_csv.parent.as_posix(),
-            weather_csv.name,
-            len(reference_schema),
-            all_match,
-        ],
-    )
     write_csv(
-        output_file / "schema.csv",
+        output_file,
+        ["metadata", "schema"],
         [
-            {
-                "column_name": column_name,
-                "csv_type": reference_schema[column_name],
-                "database_type": database_schema.get(column_name),
-                "match": (
-                    "yes"
-                    if is_schema_type_match(reference_schema[column_name], database_schema.get(column_name))
-                    else "no"
-                ),
-            }
-            for column_name in column_names
+            (
+                ["key", "value"],
+                [
+                    ["file_directory", "file_name", "column_count", "all_match"],
+                    [
+                        weather_csv.parent.as_posix(),
+                        weather_csv.name,
+                        len(reference_schema),
+                        "yes" if all_match else "no",
+                    ],
+                ],
+            ),
+            (
+                ["column_name", "csv_type", "database_type", "match"],
+                [
+                    column_names,
+                    [reference_schema[column_name] for column_name in column_names],
+                    [database_schema.get(column_name) for column_name in column_names],
+                    [
+                        "yes"
+                        if is_schema_type_match(reference_schema[column_name], database_schema.get(column_name))
+                        else "no"
+                        for column_name in column_names
+                    ],
+                ],
+            ),
         ],
     )
     print(f"EDA 01 saved: {output_file.name}")

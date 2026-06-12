@@ -1,11 +1,20 @@
-from pipeline.services.helpers import reset_csv_dir, write_high_unique_csvs, write_low_unique_csvs, write_metadata_csv
+from tqdm import tqdm
+from pipeline.services.helpers import (
+    column_profile_file_name,
+    reset_csv_dir,
+    write_csv,
+    write_csv_rows,
+    write_high_unique_column_csv,
+    write_low_unique_column_csv,
+)
 from pipeline.services.queries import (
-    build_high_unique_columns,
-    build_low_unique_columns,
     calculate_valid_type_percentages,
+    count_limited_unique_values,
     ensure_table_exists,
     get_column_data_types,
     get_column_groups,
+    profile_high_unique_column,
+    profile_low_unique_column,
     quote_identifier,
     run_with_conn,
 )
@@ -47,17 +56,6 @@ def main(conn):
         low_unique_data_types,
         row_count,
     )
-    low_unique_columns = build_low_unique_columns(
-        conn,
-        tmp_taxi05_quoted,
-        low_unique_column_names,
-        low_unique_data_types,
-        low_unique_valid_type_percentages,
-        row_count,
-        desc="EDA 09 - value counts",
-        leave=False,
-    )
-
     high_unique_data_types = get_column_data_types(
         column_type_rows,
         high_unique_column_names,
@@ -69,33 +67,120 @@ def main(conn):
         high_unique_data_types,
         row_count,
     )
-    high_unique_columns = build_high_unique_columns(
-        conn,
-        TMP_TAXI05,
-        high_unique_column_names,
-        high_unique_data_types,
-        high_unique_valid_type_percentages,
-        row_count,
-        desc="EDA 09 - profiling high-duplicate columns",
-        temp_prefix="tmp_eda09",
-    )
-
     reset_csv_dir(output_file)
-    write_metadata_csv(
-        output_file,
-        keys=[
-            "row_count",
-            "low_unique_column_count",
-            "high_unique_column_count",
-        ],
-        values=[
+    low_unique_columns = []
+    for index, (column_name, data_type, valid_type_percent) in enumerate(
+        tqdm(
+            zip(
+                low_unique_column_names,
+                low_unique_data_types,
+                low_unique_valid_type_percentages,
+            ),
+            desc="EDA 09 - value counts",
+            unit="col",
+            total=len(low_unique_column_names),
+            leave=False,
+        ),
+        start=1,
+    ):
+        unique_count = count_limited_unique_values(
+            conn,
+            tmp_taxi05_quoted,
+            quote_identifier(column_name),
+        )
+        low_unique_column = profile_low_unique_column(
+            conn,
+            tmp_taxi05_quoted,
+            column_name,
+            data_type,
+            unique_count,
+            valid_type_percent,
             row_count,
-            len(low_unique_columns),
-            len(high_unique_columns),
+        )
+        low_unique_column["profile_csv"] = write_low_unique_column_csv(
+            output_file,
+            low_unique_column,
+            file_name=column_profile_file_name(column_name, index),
+        )
+        low_unique_columns.append(low_unique_column)
+
+    high_unique_columns = []
+    for index, (column_name, data_type, valid_type_percent) in enumerate(
+        tqdm(
+            zip(
+                high_unique_column_names,
+                high_unique_data_types,
+                high_unique_valid_type_percentages,
+            ),
+            desc="EDA 09 - profiling high-duplicate columns",
+            unit="col",
+            total=len(high_unique_column_names),
+            leave=False,
+        ),
+        start=1,
+    ):
+        high_unique_column = profile_high_unique_column(
+            conn,
+            TMP_TAXI05,
+            column_name,
+            data_type,
+            valid_type_percent,
+            row_count,
+            temp_prefix="tmp_eda09",
+        )
+        profile_kind, profile_csv = write_high_unique_column_csv(
+            output_file,
+            high_unique_column,
+            file_name=column_profile_file_name(column_name, index),
+        )
+        high_unique_column["profile_kind"] = profile_kind
+        high_unique_column["profile_csv"] = profile_csv
+        high_unique_columns.append(high_unique_column)
+
+    write_csv(
+        output_file,
+        ["metadata"],
+        [(
+            ["key", "value"],
+            [
+                ["row_count", "low_unique_column_count", "high_unique_column_count"],
+                [row_count, len(low_unique_columns), len(high_unique_columns)],
+            ],
+        )],
+    )
+    write_csv_rows(
+        output_file / "low_unique_columns.csv",
+        [
+            {
+                key: value
+                for key, value in row.items()
+                if key not in {"values", "counts", "percentages"}
+            }
+            for row in low_unique_columns
+        ],
+        columns=["column_name", "data_type", "unique_count", "valid_type_percent", "profile_csv"],
+    )
+    write_csv_rows(
+        output_file / "high_unique_columns.csv",
+        [
+            {
+                **{
+                    key: value
+                    for key, value in row.items()
+                    if key not in {
+                        "month_counts",
+                        "month_percentages",
+                        "bin_edges",
+                        "bin_counts",
+                        "bin_percentages",
+                        "filter",
+                    }
+                },
+                **(row.get("filter") if isinstance(row.get("filter"), dict) else {}),
+            }
+            for row in high_unique_columns
         ],
     )
-    write_low_unique_csvs(output_file, low_unique_columns)
-    write_high_unique_csvs(output_file, high_unique_columns)
     print(f"EDA 09 saved: {output_file.name}")
 
 
