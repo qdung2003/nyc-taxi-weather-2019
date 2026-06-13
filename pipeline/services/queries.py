@@ -207,11 +207,14 @@ def build_low_unique_column_arrays(
 
 def sql_table_ref(name: str) -> str:
     stripped = name.strip()
-    if not stripped:
+    if (
+        not stripped
+        or stripped.startswith("(")
+        or (stripped.startswith('"') and stripped.endswith('"'))
+    ):
         return stripped
-    if stripped.startswith("(") or (stripped.startswith('"') and stripped.endswith('"')):
-        return stripped
-    return quote_identifier(stripped)
+    else:
+        return quote_identifier(stripped)
 
 
 
@@ -282,20 +285,22 @@ def get_column_groups(
 def read_column_names_csv(path: Path) -> list[str]:
     with path.open("r", encoding="utf-8", newline="") as file:
         reader = csv.DictReader(file)
-        column_name_field = "column_name" if "column_name" in (reader.fieldnames or []) else "column name"
         return [
-            str(row[column_name_field])
+            str(row["column_name"])
             for row in reader
-            if row.get(column_name_field)
+            if row.get("column_name")
         ]
 
 
 def get_column_data_types(column_type_rows, column_names: list[str]) -> list[str]:
-    column_name_set = set(column_names)
-    return [
-        str(row[1])
+    data_type_by_column = {
+        str(row[0]): str(row[1])
         for row in column_type_rows
-        if str(row[0]) in column_name_set
+    }
+    return [
+        data_type_by_column[column_name]
+        for column_name in column_names
+        if column_name in data_type_by_column
     ]
 
 # high_unique_column
@@ -442,53 +447,52 @@ def profile_numeric_column(
 def profile_datetime_column(
     conn,
     source_table: str,
-    col_name: str,
-    total_rows: int,
-    *,
-    year_start: datetime = datetime(YEAR, 1, 1),
-    year_end: datetime = datetime(YEAR + 1, 1, 1),
+    column_name: str,
+    row_count: int,
 ):
-    col = quote_identifier(col_name)
+    year_start = datetime(YEAR, 1, 1),
+    year_end = datetime(YEAR + 1, 1, 1),
+    column_name_quoted = quote_identifier(column_name)
     source_table_quoted = sql_table_ref(source_table)
     month_count_exprs = ",\n            ".join(
-        f"COUNT(*) FILTER (WHERE ts >= TIMESTAMP '{year_start:%Y-%m-%d %H:%M:%S}' "
-        f"AND ts < TIMESTAMP '{year_end:%Y-%m-%d %H:%M:%S}' "
-        f"AND EXTRACT(MONTH FROM ts) = {month}) AS month_{month:02d}"
+        f"COUNT(*) FILTER (WHERE timestamp >= TIMESTAMP '{year_start:%Y-%m-%d %H:%M:%S}' "
+        f"AND timestamp < TIMESTAMP '{year_end:%Y-%m-%d %H:%M:%S}' "
+        f"AND EXTRACT(MONTH FROM timestamp) = {month}) AS month_{month:02d}"
         for month in range(1, 13)
     )
 
     row = conn.execute(
         f"""
-        WITH typed AS (
-            SELECT TRY_CAST({col} AS TIMESTAMP) AS ts
+        WITH table_1_column AS (
+            SELECT TRY_CAST({column_name_quoted} AS TIMESTAMP) AS timestamp
             FROM {source_table_quoted}
         )
         SELECT
-            MIN(ts) AS min_value,
-            MAX(ts) AS max_value,
+            MIN(timestamp) AS min_value,
+            MAX(timestamp) AS max_value,
             COUNT(*) FILTER (
-                WHERE ts < TIMESTAMP '{year_start:%Y-%m-%d %H:%M:%S}'
-            ) AS before_year_quantity,
+                WHERE timestamp < TIMESTAMP '{year_start:%Y-%m-%d %H:%M:%S}'
+            ) AS before_year_count,
             COUNT(*) FILTER (
-                WHERE ts >= TIMESTAMP '{year_end:%Y-%m-%d %H:%M:%S}'
-            ) AS after_year_quantity,
+                WHERE timestamp >= TIMESTAMP '{year_end:%Y-%m-%d %H:%M:%S}'
+            ) AS after_year_count,
             {month_count_exprs}
-        FROM typed
-        WHERE ts IS NOT NULL
+        FROM table_1_column
+        WHERE timestamp IS NOT NULL
         """
     ).fetchone()
 
-    min_value, max_value, before_year_quantity, after_year_quantity, *month_quantity = row
-    month_quantity = [int(count or 0) for count in month_quantity]
+    min_value, max_value, before_year_count, after_year_count, *month_counts = row
+    month_counts = [int(month_count or 0) for month_count in month_counts]
 
     return {
         "min_value": min_value.isoformat(sep=" ") if min_value else None,
-        "before_year_count": int(before_year_quantity or 0),
-        "month_counts": month_quantity,
-        "month_percentages": [percentage(count, total_rows) for count in month_quantity],
-        "after_year_count": int(after_year_quantity or 0),
         "max_value": max_value.isoformat(sep=" ") if max_value else None,
-        "month_count": len(month_quantity),
+        "before_year_count": int(before_year_count or 0),
+        "after_year_count": int(after_year_count or 0),
+        "month_count": len(month_counts),
+        "month_counts": month_counts,
+        "month_percentages": [percentage(month_count, row_count) for month_count in month_counts],
     }
 
 
