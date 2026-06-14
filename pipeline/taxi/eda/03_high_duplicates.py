@@ -97,7 +97,7 @@ def main(conn):
                 column_name,
                 row_count,
             )
-            #########
+
             datetime_column_names.append(column_name)
             datetime_data_types.append(data_type)
             datetime_valid_type_percents.append(valid_type_percent)
@@ -107,10 +107,8 @@ def main(conn):
             datetime_after_year_counts.append(profile.get("after_year_count"))
             datetime_month_counts.append(profile.get("month_count"))
 
-
-
             for month, month_count, month_percentage in zip(
-                range(1, len(profile.get("month_counts", [])) + 1),
+                range(1, int(profile.get("month_count", 0)) + 1),
                 profile.get("month_counts", []),
                 profile.get("month_percentages", []),
             ):
@@ -127,7 +125,7 @@ def main(conn):
                 TABLE_TAXI_RAW,
                 column_name,
                 row_count,
-                temp_prefix="tmp_eda03",
+                "tmp_eda03",
             )
             numeric_column_names.append(column_name)
             numeric_data_types.append(data_type)

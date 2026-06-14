@@ -2,11 +2,9 @@
 from datetime import datetime
 from pathlib import Path
 import csv
-from tqdm import tqdm
 from pipeline.services.connect import connect_warehouse
 from pipeline.services.helpers import percentage, round_if_needed
 from pipeline.constants.columns import AGGREGATE_COLUMNS, MONEY_COLUMNS
-from pipeline.constants.tqdm_settings import TQDM_DISABLE, TQDM_MIN_INTERVAL
 from pipeline.constants.times import YEAR
 from pipeline.constants.unique_settings import (
     MAX_UNIQUE_VALUES,
@@ -344,103 +342,101 @@ def profile_high_unique_column(
 def profile_numeric_column(
     conn,
     source_table: str,
-    col_name: str,
-    total_rows: int,
-    *,
-    tail_ratio: float = 1 / 101,
-    positive_bin_count: int = 100,
-    temp_prefix: str = "tmp_profile",
+    column_name: str,
+    row_count: int,
+    temp_prefix: str,
 ):
-    col = quote_identifier(col_name)
+    column_name_quoted = quote_identifier(column_name)
     source_table_quoted = sql_table_ref(source_table)
-    temp_col_table = quote_identifier(f"{temp_prefix}_{col_name}_v")
+    table_1_column_quoted = quote_identifier(f"{temp_prefix}_{column_name}_v")
 
-    conn.execute(f"DROP TABLE IF EXISTS {temp_col_table}")
+    conn.execute(f"DROP TABLE IF EXISTS {table_1_column_quoted}")
     conn.execute(
         f"""
-        CREATE TEMP TABLE {temp_col_table} AS
-        SELECT CAST({col} AS DOUBLE) AS v
+        CREATE TEMP TABLE {table_1_column_quoted} AS
+        SELECT CAST({column_name_quoted} AS DOUBLE) AS float
         FROM {source_table_quoted}
-        WHERE TRY_CAST({col} AS DOUBLE) IS NOT NULL
-          AND NOT isnan(CAST({col} AS DOUBLE))
+        WHERE TRY_CAST({column_name_quoted} AS DOUBLE) IS NOT NULL
+          AND NOT isnan(CAST({column_name_quoted} AS DOUBLE))
         """
     )
 
-    min_value, max_value, negative_quantity, zero_quantity, positive_count = conn.execute(
+    min_value, max_value, negative_count, zero_count, positive_count = conn.execute(
         f"""
         SELECT
-            MIN(v) AS min_value,
-            MAX(v) AS max_value,
-            COUNT(*) FILTER (WHERE v < 0) AS negative_quantity,
-            COUNT(*) FILTER (WHERE v = 0) AS zero_quantity,
-            COUNT(*) FILTER (WHERE v > 0) AS positive_count
-        FROM {temp_col_table}
+            MIN(float) AS min_value,
+            MAX(float) AS max_value,
+            COUNT(*) FILTER (WHERE float < 0) AS negative_count,
+            COUNT(*) FILTER (WHERE float = 0) AS zero_count,
+            COUNT(*) FILTER (WHERE float > 0) AS positive_count
+        FROM {table_1_column_quoted}
         """
     ).fetchone()
 
     if int(positive_count or 0) > 0:
         min_positive_value = conn.execute(
             f"""
-            SELECT MIN(v)
-            FROM {temp_col_table}
-            WHERE v > 0
+            SELECT MIN(float)
+            FROM {table_1_column_quoted}
+            WHERE float > 0
             """
         ).fetchone()[0]
-        max_chart, above_max_chart_quantity = conn.execute(
+        chart_max_value, above_chart_max_value_count = conn.execute(
             f"""
             WITH q AS (
-                SELECT quantile_cont(v, {1 - tail_ratio:.12f}) AS max_chart
-                FROM {temp_col_table}
-                WHERE v > 0
+                SELECT quantile_cont(float, {1 - TAIL_RATIO:.12f}) AS chart_max_value
+                FROM {table_1_column_quoted}
+                WHERE float > 0
             )
+
             SELECT
-                q.max_chart,
-                COUNT(*) FILTER (WHERE v > q.max_chart) AS above_max_chart_quantity
-            FROM {temp_col_table}
-            CROSS JOIN q
-            GROUP BY q.max_chart
+                (SELECT chart_max_value FROM q) AS chart_max_value,
+                COUNT(*) FILTER (
+                    WHERE float > (SELECT chart_max_value FROM q)
+                ) AS above_chart_max_value_count
+            FROM {table_1_column_quoted}
             """
         ).fetchone()
         positive_lower = float(min_positive_value or 0.0)
-        positive_upper = float(max_chart)
-        if positive_upper <= positive_lower:
-            bin_edges, bin_counts = [positive_lower, positive_upper], [0] * positive_bin_count
-        else:
+        positive_upper = float(chart_max_value)
+        if positive_lower >= positive_upper:
+            bin_edges, bin_counts = [positive_lower, positive_upper], [0] * POSITIVE_BIN_COUNT
+        else: ####
             bin_edges, bin_counts, _ = build_current_histogram(
                 conn,
-                temp_col_table,
+                table_1_column_quoted,
                 positive_lower,
                 positive_upper,
-                positive_bin_count,
+                POSITIVE_BIN_COUNT,
             )
         positive_range = {
             "bin_edges": [round_if_needed(x) for x in bin_edges[1:]],
             "bin_counts": bin_counts,
             "bin_percentages": [
-                round_if_needed((count / total_rows * 100) if total_rows else 0)
+                round_if_needed((count / row_count * 100) if row_count else 0)
                 for count in bin_counts
             ],
         }
     else:
-        max_chart = None
-        above_max_chart_quantity = 0
+        chart_max_value = None
+        above_chart_max_value_count = 0
         positive_range = {"bin_edges": [], "bin_counts": [], "bin_percentages": []}
 
-    negative_count = int(negative_quantity or 0)
-    zero_count = int(zero_quantity or 0)
+    negative_count = int(negative_count or 0)
+    zero_count = int(zero_count or 0)
     result = {
         "min_value": round_if_needed(min_value),
         "negative_count": negative_count,
         "zero_count": zero_count,
-        "chart_max_value": round_if_needed(max_chart),
+        "chart_max_value": round_if_needed(chart_max_value),
         "bin_edges": positive_range.get("bin_edges", []),
         "bin_counts": positive_range.get("bin_counts", []),
         "bin_percentages": positive_range.get("bin_percentages", []),
-        "above_chart_max_value_count": int(above_max_chart_quantity or 0),
+        "above_chart_max_value_count": int(above_chart_max_value_count or 0),
         "max_value": round_if_needed(max_value),
         "range_count": len(positive_range.get("bin_counts", [])) + 2,
     }
-    conn.execute(f"DROP TABLE IF EXISTS {temp_col_table}")
+    conn.execute(f"DROP TABLE IF EXISTS {table_1_column_quoted}")
     return result
 
 
